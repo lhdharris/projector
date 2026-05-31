@@ -93,6 +93,13 @@
   //             onAddTaskFor(assignee), onDeleteMember(name) }
   function render(container, tasks, handlers, opts) {
     opts = opts || {};
+    // A status change re-renders the whole board. The .team-board is the
+    // horizontal scroller, and we rebuild it from scratch below, so without
+    // this its scrollLeft resets and the view snaps back to the leftmost
+    // column. Capture the old position and restore it onto the new board.
+    const prevBoard = container.querySelector('.team-board');
+    const prevScrollLeft = prevBoard ? prevBoard.scrollLeft : 0;
+
     container.innerHTML = '';
     closePopup();
 
@@ -129,6 +136,9 @@
       }
     }
     container.appendChild(board);
+    // Now that the new board is in the DOM (and its scrollWidth is known), put
+    // the user back where they were; the browser clamps if it's now narrower.
+    board.scrollLeft = prevScrollLeft;
   }
 
   function column(label, assignee, tasks, handlers, opts) {
