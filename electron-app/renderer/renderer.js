@@ -1,0 +1,1617 @@
+// App orchestrator: owns state, wires the top bar / sidebar / modal, and
+// mediates between the Kanban and Gantt views and the file storage. Each
+// project is one .md file; edits mutate an in-memory model and round-trip
+// back through GanttParse.writeBackToMarkdown so any prose around the
+// ```mermaid block is preserved.
+
+(function () {
+  'use strict';
+  const P = window.GanttParse;
+
+  const state = {
+    folder: '',
+    projects: [],
+    folders: [],        // folder (sub-directory) names in the sidebar
+    currentFile: null,
+    rawMd: '',
+    model: null,        // { title, dateFormat, tasks: [...] }
+    color: null,        // effective colour of the current project
+    view: 'kanban',
+    mode: 'project',    // 'project' (one project) | 'global' (all projects)
+    global: [],         // [{ file, title, color, model }] when in global mode
+    built: null,        // GlobalView.build(...) result while in global mode
+    team: [],           // app-wide roster of assignee names (all projects)
+    editingId: null,    // task id being edited, or null for a new task
+    newStatus: 'todo',  // status for a brand-new task
+    editModel: null,    // model that owns the task being edited
+    editSave: null,     // async fn persisting that model back to disk
+    profiles: [],       // roster of profile names (Work / Household / …)
+    activeProfile: '',  // '' = All projects
+    teamEditProfile: '',// which profile's roster the Settings panel is editing
+  };
+
+  // ---- window controls --------------------------------------------------
+  byId('minimize').addEventListener('click', () => window.wm.minimize());
+  byId('maximize').addEventListener('click', () => window.wm.toggleMaximize());
+  byId('close').addEventListener('click', () => window.wm.close());
+
+  // The window can open right under the cursor; suppress :hover (so the close
+  // button doesn't flash red) until the mouse actually moves — same trick the
+  // tabless-browser chrome uses.
+  document.addEventListener('mousemove', () => document.body.classList.remove('no-hover'), { once: true });
+
+  // Track the cursor so menus we open without an event (e.g. the global-view
+  // project picker) can anchor near where the user just clicked.
+  const lastMouse = { x: 120, y: 120 };
+  document.addEventListener('mousemove', (e) => { lastMouse.x = e.clientX; lastMouse.y = e.clientY; });
+
+  // ---- view toggle ------------------------------------------------------
+  document.querySelectorAll('#view-toggle .seg-btn').forEach((btn) => {
+    btn.addEventListener('click', () => setView(btn.dataset.view));
+  });
+
+  // Gantt zoom controls (project + global gantt share the Gantt module).
+  byId('gantt-zoom-in').addEventListener('click', () => window.Gantt.zoomIn());
+  byId('gantt-zoom-out').addEventListener('click', () => window.Gantt.zoomOut());
+  byId('gantt-zoom-label').addEventListener('click', () => window.Gantt.zoomReset());
+  byId('g-zoom-in').addEventListener('click', () => window.Gantt.zoomIn());
+  byId('g-zoom-out').addEventListener('click', () => window.Gantt.zoomOut());
+  byId('g-zoom-label').addEventListener('click', () => window.Gantt.zoomReset());
+
+  // ---- global view -----------------------------------------------------
+  byId('global-view-btn').addEventListener('click', enterGlobal);
+
+  function setView(view) {
+    state.view = view;
+    localStorage.setItem('lastView', view); // remember the view across launches
+    updateViewToggleButtons();
+    renderCurrentView();
+  }
+
+  function updateViewToggleButtons() {
+    document.querySelectorAll('#view-toggle .seg-btn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.view === state.view);
+    });
+  }
+
+  // ---- sidebar ----------------------------------------------------------
+  byId('new-project').addEventListener('click', (e) => { e.stopPropagation(); onNewProject(); });
+  byId('new-folder').addEventListener('click', openWorkspace);
+  byId('profile-switcher').addEventListener('click', openProfileMenu);
+
+  // Collapsed-folder state survives reloads.
+  const collapsed = new Set(loadCollapsed());
+  function loadCollapsed() {
+    try { return JSON.parse(localStorage.getItem('collapsedFolders') || '[]'); }
+    catch { return []; }
+  }
+  function saveCollapsed() {
+    localStorage.setItem('collapsedFolders', JSON.stringify([...collapsed]));
+  }
+
+  async function loadProjects(selectFile) {
+    const [projects, folders] = await Promise.all([
+      window.projects.list(),
+      window.projects.listFolders(),
+    ]);
+    state.projects = projects;
+    state.folders = folders;
+    renderProjectList();
+
+    if (selectFile) selectProject(selectFile);
+    else if (state.currentFile && !state.projects.find((p) => p.file === state.currentFile)) {
+      clearSelection();
+    }
+  }
+
+  // A project is visible under the active profile if no profile is active
+  // ("All projects"), it carries that profile, or it's untagged (untagged
+  // projects appear in every profile).
+  function inActiveProfile(p) {
+    if (!state.activeProfile) return true;
+    return !p.profile || p.profile === state.activeProfile;
+  }
+
+  // Friendly path for tooltips: collapse the user's home dir to "~".
+  function displayPath(abs) {
+    return String(abs || '').replace(/^(\/home\/[^/]+|\/Users\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)/, '~');
+  }
+
+  // Build the sidebar: one collapsible group per workspace, projects nested
+  // underneath, filtered by the active profile.
+  function renderProjectList() {
+    const list = byId('project-list');
+    list.innerHTML = '';
+
+    if (!state.folders.length) {
+      const empty = document.createElement('div');
+      empty.className = 'list-empty';
+      empty.textContent = 'No workspaces open. Use the folder button to open one.';
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const folder of state.folders) {
+      const inFolder = state.projects.filter((p) => p.folderPath === folder.path);
+      const items = inFolder.filter(inActiveProfile);
+      // Under an active profile, hide any workspace with no projects in it —
+      // whether it holds projects from other profiles or is empty entirely.
+      // Empty workspaces still surface under "All projects", where the user can
+      // see every linked folder (including ones they just opened to fill).
+      if (state.activeProfile && !items.length) continue;
+      list.appendChild(folderGroup(folder, items));
+    }
+  }
+
+  function projectItem(p) {
+    const item = document.createElement('div');
+    item.className = 'project-item';
+    item.dataset.file = p.file;
+    item.draggable = true;
+    if (state.mode === 'project' && p.file === state.currentFile) item.classList.add('active');
+    item.innerHTML = `<span class="pi-dot"></span><span class="pi-title"></span>`;
+    item.querySelector('.pi-dot').style.background = window.Palette.colorFor(p);
+    item.querySelector('.pi-title').textContent = p.title;
+    item.addEventListener('click', () => selectProject(p.file));
+    item.addEventListener('contextmenu', (e) => { e.preventDefault(); openProjectMenu(e, p); });
+    item.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('application/x-projector-file', p.file);
+      e.dataTransfer.effectAllowed = 'move';
+      item.classList.add('dragging');
+    });
+    item.addEventListener('dragend', () => item.classList.remove('dragging'));
+    return item;
+  }
+
+  function folderGroup(folder, items) {
+    const wrap = document.createElement('div');
+    wrap.className = 'folder-group';
+    const isCollapsed = collapsed.has(folder.path);
+
+    const head = document.createElement('div');
+    head.className = 'folder-head' + (isCollapsed ? ' collapsed' : '');
+    // Native tooltip (appears after a hover beat) shows where the workspace lives.
+    head.title = displayPath(folder.path);
+    head.innerHTML =
+      `<span class="folder-caret">▾</span>` +
+      `<span class="folder-name"></span>` +
+      `<span class="count">${items.length}</span>` +
+      `<button class="folder-add" title="New project in workspace">+</button>`;
+    head.querySelector('.folder-name').textContent = folder.name;
+
+    head.addEventListener('click', (e) => {
+      if (e.target.closest('.folder-add')) return;
+      if (collapsed.has(folder.path)) collapsed.delete(folder.path); else collapsed.add(folder.path);
+      saveCollapsed();
+      renderProjectList();
+    });
+    head.querySelector('.folder-add').addEventListener('click', (e) => {
+      e.stopPropagation();
+      onNewProject(folder);
+    });
+    head.addEventListener('contextmenu', (e) => { e.preventDefault(); openFolderMenu(e, folder); });
+
+    // Drop a project onto the header to move it into this folder.
+    head.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer.types.includes('application/x-projector-file')) return;
+      e.preventDefault();
+      head.classList.add('drop-target');
+    });
+    head.addEventListener('dragleave', () => head.classList.remove('drop-target'));
+    head.addEventListener('drop', (e) => {
+      e.preventDefault();
+      head.classList.remove('drop-target');
+      const file = e.dataTransfer.getData('application/x-projector-file');
+      const p = state.projects.find((x) => x.file === file);
+      if (p && p.folderPath !== folder.path) moveProject(p, folder);
+    });
+
+    wrap.appendChild(head);
+
+    if (!isCollapsed) {
+      const body = document.createElement('div');
+      body.className = 'folder-body';
+      if (!items.length) {
+        const e = document.createElement('div');
+        e.className = 'list-empty';
+        e.textContent = 'Empty';
+        body.appendChild(e);
+      }
+      for (const p of items) body.appendChild(projectItem(p));
+      wrap.appendChild(body);
+    }
+    return wrap;
+  }
+
+  async function selectProject(file) {
+    state.mode = 'project';
+    state.currentFile = file;
+    state.rawMd = await window.projects.read(file);
+    const block = P.extractMermaidBlock(state.rawMd);
+    state.model = P.parseGantt(block.code);
+    const meta = state.projects.find((p) => p.file === file) || { title: state.model.title, file };
+    state.color = window.Palette.colorFor({ color: window.Palette.readColor(state.rawMd), title: meta.title, file });
+
+    document.querySelectorAll('.project-item').forEach((el) => {
+      el.classList.toggle('active', el.dataset.file === file);
+    });
+    byId('global-view-btn').classList.remove('active');
+
+    byId('view-toggle').hidden = false;
+    byId('empty-state').hidden = true;
+    byId('global').hidden = true;
+    localStorage.setItem('lastMode', 'project'); // restored on next launch
+    localStorage.setItem('lastFile', file);
+    renderCurrentView();
+  }
+
+  function clearSelection() {
+    state.currentFile = null;
+    state.model = null;
+    byId('view-toggle').hidden = true;
+    byId('kanban').hidden = true;
+    byId('team').hidden = true;
+    byId('gantt').hidden = true;
+    byId('global').hidden = true;
+    byId('empty-state').hidden = false;
+  }
+
+  // ---- rendering --------------------------------------------------------
+
+  // The Team view only earns its place once work is split across ≥2 people;
+  // with one (or no) assignee there's nothing to triage by person, so hide the
+  // Team toggle and fall back to the Task List.
+  //
+  // But once you're *in* Team view, stay there: shuffling jobs around often
+  // leaves a member momentarily empty (dropping below 2 assignees), and that
+  // must not yank you back to the Task List mid-move. So only fall back when
+  // Team isn't the view already on screen — i.e. on load / opening a project
+  // where it can't be shown — never on a re-render triggered by an edit. The
+  // toggle likewise stays visible while Team is the active view.
+  function updateTeamToggle(tasks) {
+    const people = new Set();
+    for (const t of tasks) if (t.assignee && t.assignee.trim()) people.add(t.assignee.trim());
+    const qualifies = people.size >= 2;
+    const teamEl = byId(state.mode === 'global' ? 'global-team' : 'team');
+    const inTeamView = state.view === 'team' && teamEl && !teamEl.hidden;
+    const btn = document.querySelector('#view-toggle .seg-btn[data-view="team"]');
+    if (btn) btn.hidden = !(qualifies || inTeamView);
+    if (!qualifies && state.view === 'team' && !inTeamView) {
+      state.view = 'kanban';
+      document.querySelectorAll('#view-toggle .seg-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.view === 'kanban');
+      });
+    }
+  }
+
+  function renderCurrentView() {
+    if (state.mode === 'global') return renderGlobalView();
+    if (!state.model) return;
+    updateViewToggleButtons();
+    updateTeamToggle(state.model.tasks);
+    const kb = byId('kanban');
+    const gt = byId('gantt');
+    const tm = byId('team');
+    const colorForTask = () => state.color; // one colour for the whole project
+    kb.hidden = gt.hidden = tm.hidden = true;
+    if (state.view === 'kanban') {
+      kb.hidden = false;
+      window.Kanban.render(kb, state.model, {
+        onEditTask: openEditModal,
+        onAddTask: openNewModal,
+        onMoveTask: moveTask,
+      }, { colorForTask });
+    } else if (state.view === 'team') {
+      tm.hidden = false;
+      // No roster passed: a single project shows only people who actually have
+      // a task in it, not the whole team. (Global view below passes the full
+      // roster so everyone appears.)
+      window.Team.render(tm, state.model.tasks, {
+        onEditTask: openEditModal,
+        onReassign: reassignTask,
+        onSetStatus: moveTask,
+        onAddTaskFor: (assignee) => openNewModal('todo', assignee),
+        onDeleteMember: deleteMemberFromView,
+      }, { colorForTask });
+    } else {
+      gt.hidden = false;
+      window.Gantt.render(byId('gantt-render'), state.model, { onEditTask: openEditModal }, { colorForTask });
+    }
+  }
+
+  // ---- global view ------------------------------------------------------
+  async function enterGlobal() {
+    state.mode = 'global';
+    // Load + parse the projects in the active profile fresh ("All projects"
+    // keeps everything, since inActiveProfile is then true for all). Folders are
+    // refreshed too so closing a workspace from global view drops it from the
+    // sidebar.
+    const [list, folders] = await Promise.all([
+      window.projects.list(),
+      window.projects.listFolders(),
+    ]);
+    state.projects = list;
+    state.folders = folders;
+    state.global = [];
+    for (const p of list.filter(inActiveProfile)) {
+      const md = await window.projects.read(p.file);
+      const model = P.parseGantt(P.extractMermaidBlock(md).code);
+      state.global.push({
+        file: p.file,
+        title: p.title,
+        color: window.Palette.colorFor({ color: window.Palette.readColor(md), title: p.title, file: p.file }),
+        model,
+      });
+    }
+
+    // Rebuild the sidebar from the freshly loaded set so deleting a project or
+    // closing a workspace while in global view updates it too. In global mode
+    // renderProjectList marks no project active, so this also clears any prior
+    // project-mode selection highlight.
+    renderProjectList();
+    byId('global-view-btn').classList.add('active');
+    byId('view-toggle').hidden = false;
+    byId('empty-state').hidden = true;
+    byId('kanban').hidden = true;
+    byId('team').hidden = true;
+    byId('gantt').hidden = true;
+    byId('global').hidden = false;
+    localStorage.setItem('lastMode', 'global'); // restored on next launch
+    renderGlobalView();
+  }
+
+  function renderGlobalView() {
+    updateViewToggleButtons();
+    state.built = window.GlobalView.build(state.global);
+    updateTeamToggle(state.built.kanbanModel.tasks);
+    const gk = byId('global-kanban');
+    const gg = byId('global-gantt');
+    const gtm = byId('global-team');
+    gk.hidden = gg.hidden = gtm.hidden = true;
+    if (state.view === 'kanban') {
+      gk.hidden = false;
+      window.Kanban.render(gk, state.built.kanbanModel, {
+        onEditTask: openGlobalKanbanTask,
+        onMoveTask: globalMoveTask,
+        onAddTask: () => {},
+      }, {
+        colorForTask: state.built.colorForKanban,
+        projectLabel: state.built.projectLabel,
+        readOnlyAdd: true,
+      });
+    } else if (state.view === 'team') {
+      gtm.hidden = false;
+      window.Team.render(gtm, state.built.kanbanModel.tasks, {
+        onEditTask: openGlobalKanbanTask,
+        onReassign: globalReassign,
+        onSetStatus: globalMoveTask,
+        onAddTaskFor: addTaskGlobalForAssignee,
+        onDeleteMember: deleteMemberFromView,
+      }, {
+        colorForTask: state.built.colorForKanban,
+        projectLabel: state.built.projectLabel,
+        roster: state.team,
+      });
+    } else {
+      gg.hidden = false;
+      window.Gantt.render(byId('global-gantt-render'), state.built.ganttModel, {
+        onEditTask: openGlobalGanttTask,
+      }, { colorForTask: state.built.colorForGantt });
+    }
+  }
+
+  // Edit a global card/bar in place: open the task editor against its source
+  // project's model and write back to that project's own file, without leaving
+  // the global view.
+  function openGlobalKanbanTask(gid) {
+    openGlobalTaskEditor(state.built.kInfo.get(gid));
+  }
+  function openGlobalGanttTask(nsid) {
+    const info = state.built.gInfo.get(nsid);
+    // The per-project summary bar isn't a real task — clicking it opens the project.
+    if (info && info.summary) return selectProject(info.file);
+    openGlobalTaskEditor(info);
+  }
+  function openGlobalTaskEditor(info) {
+    if (!info) return;
+    const proj = state.global.find((p) => p.file === info.file);
+    if (!proj) return;
+    openEditModal(info.origId, proj.model, async () => {
+      const md = await window.projects.read(info.file);
+      await window.projects.write(info.file, P.writeBackToMarkdown(md, proj.model));
+    });
+  }
+
+  // Drag a card across status columns in the global Kanban: write back to the
+  // task's own project file, then refresh just that project's model.
+  async function globalMoveTask(gid, status) {
+    const info = state.built.kInfo.get(gid);
+    if (!info) return;
+    const proj = state.global.find((p) => p.file === info.file);
+    const t = proj && proj.model.tasks.find((x) => x.id === info.origId);
+    if (!t || t.status === status) return;
+    t.status = status;
+    const md = await window.projects.read(info.file);
+    const newMd = P.writeBackToMarkdown(md, proj.model);
+    await window.projects.write(info.file, newMd);
+    renderGlobalView();
+  }
+
+  async function saveModel() {
+    state.rawMd = P.writeBackToMarkdown(state.rawMd, state.model);
+    await window.projects.write(state.currentFile, state.rawMd);
+  }
+
+  async function moveTask(id, status) {
+    const t = state.model.tasks.find((x) => x.id === id);
+    if (!t || t.status === status) return;
+    t.status = status;
+    await saveModel();
+    renderCurrentView();
+  }
+
+  // Reassign a task (Team view drag-and-drop) within the current project.
+  async function reassignTask(id, assignee) {
+    const t = state.model.tasks.find((x) => x.id === id);
+    if (!t || (t.assignee || '') === assignee) return;
+    t.assignee = assignee;
+    rememberAssignee(assignee);
+    await saveModel();
+    renderCurrentView();
+  }
+
+  // Reassign a task in the global Team view: write back to its own file.
+  async function globalReassign(gid, assignee) {
+    const info = state.built.kInfo.get(gid);
+    if (!info) return;
+    const proj = state.global.find((p) => p.file === info.file);
+    const t = proj && proj.model.tasks.find((x) => x.id === info.origId);
+    if (!t || (t.assignee || '') === assignee) return;
+    t.assignee = assignee;
+    rememberAssignee(assignee);
+    const md = await window.projects.read(info.file);
+    await window.projects.write(info.file, P.writeBackToMarkdown(md, proj.model));
+    renderGlobalView();
+  }
+
+  // ---- team-view column actions (the "⋮" menu) -------------------------
+  // Add a task to a person in the global Team view: pick which project it lands
+  // in, then open the editor against that project's model + its own file writer.
+  async function addTaskGlobalForAssignee(assignee) {
+    if (!state.global.length) return;
+    const file = state.global.length === 1 ? state.global[0].file : await pickProject();
+    if (!file) return;
+    const proj = state.global.find((p) => p.file === file);
+    if (!proj) return;
+    openNewModal('todo', assignee, proj.model, async () => {
+      const md = await window.projects.read(file);
+      await window.projects.write(file, P.writeBackToMarkdown(md, proj.model));
+    });
+  }
+
+  // Choose a project from a menu anchored near the cursor (global add-task).
+  function pickProject() {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      showContextMenu(lastMouse.x, lastMouse.y, [
+        { header: 'Add task to project…' },
+        ...state.global.map((p) => ({ label: p.title, onClick: () => finish(p.file) })),
+      ]);
+      setTimeout(() => {
+        const obs = new MutationObserver(() => {
+          if (!byId('context-menu')) { obs.disconnect(); finish(null); }
+        });
+        obs.observe(document.body, { childList: true });
+      }, 0);
+    });
+  }
+
+  // Delete a team member from the Team view: unassign their tasks within the
+  // current scope (the active profile, or every project in the global view) and
+  // drop them from that scope's roster.
+  async function deleteMemberFromView(name) {
+    const scope = state.mode === 'global' ? '' : state.activeProfile;
+    const counts = await countByAssignee(scope);
+    const count = counts.get(name) || 0;
+    const where = scope ? ` ${scope}` : '';
+    const msg = count
+      ? `Delete “${name}” from the${where} team? Their ${count} task${count === 1 ? '' : 's'} will become unassigned.`
+      : `Delete “${name}” from the${where} team?`;
+    if (!window.confirm(msg)) return;
+    if (count) {
+      await applyAcrossProjects((t) => {
+        if (t.assignee === name) { t.assignee = ''; return true; }
+        return false;
+      }, scope);
+    }
+    setSavedRosterFor(scope, savedRosterFor(scope).filter((n) => n !== name));
+    await refreshAfterTeamChange();
+  }
+
+  // ---- task editor modal ------------------------------------------------
+  const modal = byId('modal-backdrop');
+  byId('f-cancel').addEventListener('click', closeModal);
+  byId('f-delete').addEventListener('click', onDeleteTask);
+  byId('task-form').addEventListener('submit', onSaveTask);
+  window.DatePicker.attach(byId('f-start')); // app-themed calendar popup
+  modal.addEventListener('mousedown', (e) => { if (e.target === modal) closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.hidden) closeModal();
+  });
+
+  // The editor's Assignee dropdown is fed by the app-wide team roster
+  // (everyone assigned in any project), plus any name on the model being
+  // edited that isn't in the roster yet.
+  function populateAssigneeList() {
+    const dl = byId('assignee-list');
+    dl.innerHTML = '';
+    const seen = new Set();
+    const add = (name) => {
+      const a = (name || '').trim();
+      if (!a || seen.has(a)) return;
+      seen.add(a);
+      const opt = document.createElement('option');
+      opt.value = a;
+      dl.appendChild(opt);
+    };
+    state.team.forEach(add);
+    if (state.editModel) state.editModel.tasks.forEach((t) => add(t.assignee));
+  }
+
+  // Rosters are scoped to a profile so the user can keep a separate "Household"
+  // team and "Work" team. Persisted as { profileName: [names] } under
+  // 'teamRosters'; the '' bucket is the shared / All-projects roster. The saved
+  // roster holds manually-added members (who may have zero tasks); it's merged
+  // with whoever is actually assigned in the relevant projects to form a view.
+  function rosterStore() {
+    try {
+      const v = JSON.parse(localStorage.getItem('teamRosters') || '{}');
+      return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+    } catch { return {}; }
+  }
+  function savedRosterFor(profile) {
+    const arr = rosterStore()[profile || ''];
+    return Array.isArray(arr) ? arr.map((s) => String(s).trim()).filter(Boolean) : [];
+  }
+  function setSavedRosterFor(profile, names) {
+    const store = rosterStore();
+    store[profile || ''] = [...new Set(names.map((s) => String(s).trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b));
+    localStorage.setItem('teamRosters', JSON.stringify(store));
+  }
+  // Move a profile's saved roster to its new name when the profile is renamed.
+  function renameRosterBucket(oldName, newName) {
+    const store = rosterStore();
+    if (store[oldName] === undefined) return;
+    const merged = [...new Set([...(store[newName] || []), ...store[oldName]])];
+    store[newName] = merged;
+    delete store[oldName];
+    localStorage.setItem('teamRosters', JSON.stringify(store));
+  }
+  // Forget a profile's saved roster when the profile is deleted.
+  function dropRosterBucket(name) {
+    const store = rosterStore();
+    if (store[name] === undefined) return;
+    delete store[name];
+    localStorage.setItem('teamRosters', JSON.stringify(store));
+  }
+
+  // One-time migration of the old flat 'teamRoster' into the shared bucket so
+  // existing members aren't lost when rosters became per-profile.
+  function migrateRoster() {
+    if (localStorage.getItem('teamRosters')) return;
+    let old = [];
+    try { old = JSON.parse(localStorage.getItem('teamRoster') || '[]'); } catch { /* ignore */ }
+    const store = {};
+    if (Array.isArray(old) && old.length) store[''] = old.map((s) => String(s).trim()).filter(Boolean);
+    localStorage.setItem('teamRosters', JSON.stringify(store));
+  }
+
+  // Does project p belong to `profile`? (Untagged projects appear in every
+  // profile, mirroring inActiveProfile.) profile '' = every project.
+  function inProfile(p, profile) {
+    if (!profile) return true;
+    return !p.profile || p.profile === profile;
+  }
+
+  // Merge a profile's saved roster with everyone assigned in the projects that
+  // belong to it. profile '' = the union across every saved bucket + all
+  // assignees, which is what the "All projects" / global Team view shows.
+  async function computeTeamFor(profile) {
+    const set = new Set();
+    if (profile) {
+      savedRosterFor(profile).forEach((n) => set.add(n));
+    } else {
+      const store = rosterStore();
+      for (const arr of Object.values(store)) (arr || []).forEach((n) => set.add(String(n).trim()));
+    }
+    for (const p of state.projects) {
+      if (!inProfile(p, profile)) continue;
+      try {
+        const md = await window.projects.read(p.file);
+        const m = P.parseGantt(P.extractMermaidBlock(md).code);
+        for (const t of m.tasks) if (t.assignee) set.add(t.assignee.trim());
+      } catch { /* unreadable file — skip */ }
+    }
+    return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }
+
+  // Refresh the live roster used by the Team view + assignee datalist for the
+  // currently active profile.
+  async function loadTeam() {
+    state.team = await computeTeamFor(state.activeProfile);
+  }
+
+  // Add a name to the active profile's roster so it's offered going forward.
+  function rememberAssignee(name) {
+    const a = (name || '').trim();
+    if (!a) return;
+    const names = savedRosterFor(state.activeProfile);
+    if (!names.includes(a)) setSavedRosterFor(state.activeProfile, [...names, a]);
+    if (!state.team.includes(a)) {
+      state.team.push(a);
+      state.team.sort((x, y) => x.localeCompare(y));
+    }
+  }
+
+  // ---- settings (profiles + team) --------------------------------------
+  const settingsBackdrop = byId('settings-backdrop');
+  const settingsBody = byId('settings-body');
+  byId('settings-done').addEventListener('click', closeSettings);
+  byId('team-add').addEventListener('click', addMember);
+  byId('profile-add').addEventListener('click', addProfile);
+  byId('team-edit-profile').addEventListener('change', (e) => {
+    state.teamEditProfile = e.target.value;
+    renderTeamMembers();
+  });
+  byId('clear-all').addEventListener('click', clearAll);
+  settingsBackdrop.addEventListener('mousedown', (e) => { if (e.target === settingsBackdrop) closeSettings(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !settingsBackdrop.hidden) closeSettings();
+  });
+  // Re-cap the modal if the window is resized while settings is open.
+  window.addEventListener('resize', fitSettingsHeight);
+
+  // Cap the settings panel to the window so its middle region (#settings-scroll)
+  // scrolls instead of the panel spilling past the top and bottom edges.
+  // innerHeight is device px; style lengths are layout px the browser then
+  // multiplies by `zoom`, so divide by it — the same correction the context menu
+  // and calendar popup use. (A CSS `vh` cap can't: zoom inflates it.)
+  function fitSettingsHeight() {
+    const zoom = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    settingsBody.style.maxHeight = (window.innerHeight - 40) / zoom + 'px';
+  }
+
+  // Human label for the roster bucket being edited ('' = the shared roster).
+  function teamScopeLabel() { return state.teamEditProfile || 'Shared'; }
+
+  function openSettings() {
+    // Default the team editor to the active profile (else the shared roster).
+    state.teamEditProfile = (state.activeProfile && state.profiles.includes(state.activeProfile))
+      ? state.activeProfile : '';
+    renderProfiles();
+    populateTeamEditProfile();
+    renderTeamMembers();
+    settingsBackdrop.hidden = false;
+    fitSettingsHeight();
+  }
+  function closeSettings() {
+    settingsBackdrop.hidden = true;
+  }
+
+  // Wipe the app back to a clean slate: forget every linked workspace (the
+  // project .md files themselves stay on disk) and clear all stored state
+  // (profiles, per-profile rosters, active profile, collapsed folders), then
+  // reload. Guarded by two confirmations whose buttons swap sides on the second
+  // so muscle-memory can't blow straight through it.
+  async function clearAll() {
+    const ok1 = await confirmDialog('Hold on, are you sure?', {
+      okLabel: 'Reset everything', cancelLabel: 'Cancel', danger: true,
+    });
+    if (!ok1) return;
+    const ok2 = await confirmDialog('Okay, I understand, but please just confirm that you are sure.', {
+      okLabel: 'Yes, reset the app', cancelLabel: 'Cancel', danger: true, swap: true,
+    });
+    if (!ok2) return;
+
+    for (const f of state.folders.slice()) {
+      try { await window.projects.removeWorkspace(f.path); } catch { /* ignore */ }
+    }
+    try { localStorage.clear(); } catch { /* ignore */ }
+    location.reload();
+  }
+
+  // Fill the "editing which team" selector with the shared bucket + every profile.
+  function populateTeamEditProfile() {
+    const sel = byId('team-edit-profile');
+    sel.innerHTML = '';
+    const opt = (value, label) => {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = label;
+      if (value === state.teamEditProfile) o.selected = true;
+      sel.appendChild(o);
+    };
+    opt('', 'Shared (all profiles)');
+    for (const name of state.profiles) opt(name, name);
+  }
+
+  async function renderTeamMembers() {
+    const wrap = byId('team-members');
+    // Compute first, then swap in one go: clearing the list up front would leave
+    // it empty across the (IPC-backed) awaits, and the browser would paint that
+    // collapsed frame — making the natural-height dialog blink as it shrinks and
+    // re-expands when switching profiles.
+    const members = await computeTeamFor(state.teamEditProfile);
+    const frag = document.createDocumentFragment();
+    if (!members.length) {
+      const e = document.createElement('div');
+      e.className = 'tm-empty';
+      e.textContent = `No members in the ${teamScopeLabel()} team yet. Add someone below.`;
+      frag.appendChild(e);
+      wrap.replaceChildren(frag);
+      return;
+    }
+    const counts = await countByAssignee(state.teamEditProfile);
+    for (const name of members) {
+      const n = counts.get(name) || 0;
+      const row = document.createElement('div');
+      row.className = 'tm-row';
+      row.innerHTML =
+        `<span class="tm-name"></span>` +
+        `<span class="tm-count">${n} task${n === 1 ? '' : 's'}</span>` +
+        `<button class="tm-menu" title="Actions" aria-label="Actions">⋮</button>`;
+      row.querySelector('.tm-name').textContent = name;
+      row.querySelector('.tm-menu').addEventListener('click', (e) => {
+        e.stopPropagation();
+        showContextMenu(e.clientX, e.clientY, [
+          { label: 'Rename', onClick: () => renameMember(name) },
+          { separator: true },
+          { label: 'Remove', danger: true, onClick: () => removeMember(name, n) },
+        ]);
+      });
+      frag.appendChild(row);
+    }
+    wrap.replaceChildren(frag);
+  }
+
+  async function addMember() {
+    const name = await promptText(`Add to the ${teamScopeLabel()} team`, '', 'Add');
+    if (name === null) return;
+    const a = name.trim();
+    if (!a) return;
+    const names = savedRosterFor(state.teamEditProfile);
+    if (!names.includes(a)) setSavedRosterFor(state.teamEditProfile, [...names, a]);
+    await refreshAfterTeamChange();
+  }
+
+  async function renameMember(oldName) {
+    const next = await promptText('Rename member', oldName, 'Rename');
+    if (next === null) return;
+    const newName = next.trim();
+    if (!newName || newName === oldName) return;
+    // Reassign every matching task in the edited profile's projects.
+    await applyAcrossProjects((t) => {
+      if (t.assignee === oldName) { t.assignee = newName; return true; }
+      return false;
+    }, state.teamEditProfile);
+    const names = savedRosterFor(state.teamEditProfile).filter((n) => n !== oldName);
+    if (!names.includes(newName)) names.push(newName);
+    setSavedRosterFor(state.teamEditProfile, names);
+    await refreshAfterTeamChange();
+  }
+
+  async function removeMember(name, count) {
+    const where = state.teamEditProfile ? ` ${state.teamEditProfile}` : '';
+    const msg = count
+      ? `Remove “${name}” from the${where} team? Their ${count} task${count === 1 ? '' : 's'} will become unassigned.`
+      : `Remove “${name}” from the${where} team?`;
+    if (!window.confirm(msg)) return;
+    if (count) {
+      await applyAcrossProjects((t) => {
+        if (t.assignee === name) { t.assignee = ''; return true; }
+        return false;
+      }, state.teamEditProfile);
+    }
+    setSavedRosterFor(state.teamEditProfile, savedRosterFor(state.teamEditProfile).filter((n) => n !== name));
+    await refreshAfterTeamChange();
+  }
+
+  // Count tasks per assignee within a profile's projects (for the manage panel).
+  async function countByAssignee(profile) {
+    const counts = new Map();
+    for (const p of state.projects) {
+      if (!inProfile(p, profile)) continue;
+      try {
+        const md = await window.projects.read(p.file);
+        const m = P.parseGantt(P.extractMermaidBlock(md).code);
+        for (const t of m.tasks) {
+          if (!t.assignee) continue;
+          counts.set(t.assignee, (counts.get(t.assignee) || 0) + 1);
+        }
+      } catch { /* skip */ }
+    }
+    return counts;
+  }
+
+  // Apply a task mutation to every project file in a profile's scope, saving
+  // only those that change. mutate(task) -> true if it modified the task.
+  // profile '' = every project.
+  async function applyAcrossProjects(mutate, profile) {
+    for (const p of state.projects) {
+      if (!inProfile(p, profile)) continue;
+      let md;
+      try { md = await window.projects.read(p.file); } catch { continue; }
+      const m = P.parseGantt(P.extractMermaidBlock(md).code);
+      let changed = false;
+      for (const t of m.tasks) if (mutate(t)) changed = true;
+      if (changed) await window.projects.write(p.file, P.writeBackToMarkdown(md, m));
+    }
+  }
+
+  // Reload in-memory models + the live roster after team changes touched files,
+  // then refresh the open view and (if open) the Settings panel.
+  async function refreshAfterTeamChange() {
+    await loadTeam();
+    if (state.mode === 'global') await enterGlobal();
+    else if (state.currentFile) await selectProject(state.currentFile);
+    else rerender();
+    if (!settingsBackdrop.hidden) {
+      populateTeamEditProfile();
+      renderTeamMembers();
+    }
+  }
+
+  // model/save default to the current single-project context; the global view
+  // passes its source project's model + a file-specific writer instead.
+  function openEditModal(id, model, save) {
+    state.editModel = model || state.model;
+    state.editSave = save || saveModel;
+    const t = state.editModel.tasks.find((x) => x.id === id);
+    if (!t) return;
+    state.editingId = id;
+    byId('modal-title').textContent = 'Edit task';
+    byId('f-delete').hidden = false;
+    populateAssigneeList();
+
+    byId('f-name').value = t.name || '';
+    byId('f-assignee').value = t.assignee || '';
+    byId('f-start').value = P.DATE_RE.test(t.start || '') ? t.start : '';
+    byId('f-start').dataset.orig = t.start || '';
+    byId('f-duration').value = Math.max(0, Math.round(P.parseDurationDays(t.duration)));
+    byId('f-status').value = t.status;
+    byId('f-crit').checked = !!t.crit;
+    byId('f-milestone').checked = !!t.milestone;
+
+    showModal();
+  }
+
+  // status/assignee prefill the new task; model/save override the single-project
+  // context (the global Team view passes a source project's model + writer).
+  function openNewModal(status, assignee, model, save) {
+    state.editingId = null;
+    state.editModel = model || state.model;
+    state.editSave = save || saveModel;
+    state.newStatus = status || 'todo';
+    byId('modal-title').textContent = 'New task';
+    byId('f-delete').hidden = true;
+    populateAssigneeList();
+
+    byId('f-name').value = '';
+    byId('f-assignee').value = assignee || '';
+    byId('f-start').value = P.todayISO();
+    byId('f-start').dataset.orig = '';
+    byId('f-duration').value = 3;
+    byId('f-status').value = status || 'todo';
+    byId('f-crit').checked = false;
+    byId('f-milestone').checked = false;
+
+    showModal();
+  }
+
+  function showModal() {
+    modal.hidden = false;
+    setTimeout(() => byId('f-name').focus(), 0);
+  }
+  function closeModal() {
+    modal.hidden = true;
+    state.editingId = null;
+  }
+
+  async function onSaveTask(e) {
+    e.preventDefault();
+    const name = byId('f-name').value.trim();
+    if (!name) return;
+
+    const assignee = byId('f-assignee').value.trim(); // '' = unassigned
+    rememberAssignee(assignee);
+    const startInput = byId('f-start').value.trim();
+    const origStart = byId('f-start').dataset.orig || '';
+    const milestone = byId('f-milestone').checked;
+    const durDays = Math.max(0, parseInt(byId('f-duration').value, 10) || 0);
+
+    // Preserve an "after <id>" start if the user left the date untouched.
+    let start;
+    if (startInput) start = startInput;
+    else if (origStart && !P.DATE_RE.test(origStart)) start = origStart; // keep "after X"
+    else start = P.todayISO();
+
+    const duration = milestone ? '0d' : `${durDays || 1}d`;
+
+    if (state.editingId) {
+      const t = state.editModel.tasks.find((x) => x.id === state.editingId);
+      if (t) {
+        t.name = name;
+        t.assignee = assignee;
+        t.start = start;
+        t.duration = duration;
+        t.status = byId('f-status').value;
+        t.crit = byId('f-crit').checked;
+        t.milestone = milestone;
+      }
+    } else {
+      state.editModel.tasks.push({
+        name,
+        assignee,
+        id: nextId(),
+        status: byId('f-status').value,
+        crit: byId('f-crit').checked,
+        milestone,
+        start,
+        duration,
+      });
+    }
+
+    await state.editSave();
+    closeModal();
+    rerender();
+  }
+
+  async function onDeleteTask() {
+    if (!state.editingId) return;
+    const i = state.editModel.tasks.findIndex((x) => x.id === state.editingId);
+    if (i !== -1) state.editModel.tasks.splice(i, 1);
+    await state.editSave();
+    closeModal();
+    rerender();
+  }
+
+  // Re-render whichever view is live after a task edit (project or global).
+  function rerender() {
+    if (state.mode === 'global') renderGlobalView();
+    else renderCurrentView();
+  }
+
+  function nextId() {
+    const used = new Set(state.editModel.tasks.map((t) => t.id));
+    let i = 1;
+    let id;
+    do { id = `t${i++}`; } while (used.has(id));
+    return id;
+  }
+
+  // ---- new project / workspaces ----------------------------------------
+  // Create a project in a workspace. If `folder` is given (folder's "+" or its
+  // context menu) we use it; otherwise the user picks among open workspaces.
+  // The dialog lets the user name the project and choose its profile (defaulting
+  // to the active one).
+  async function onNewProject(folder) {
+    // A folder's own "+" (or its context menu) targets that workspace directly.
+    // The top "+" always lets the user choose the workspace for this project —
+    // including opening a brand-new one on the spot, even when none exist yet.
+    const dir = folder ? folder.path : await pickWorkspace();
+    if (!dir) return;
+    const res = await promptNewProject('Untitled Project', state.activeProfile || '');
+    if (res === null) return;
+    const file = await window.projects.create(res.title.trim() || 'Untitled Project', dir, res.profile || '');
+    collapsed.delete(dir); // make sure the new project is visible
+    await loadProjects(file);
+  }
+
+  // ---- import / duplicate with date-shift ------------------------------
+  // Earliest concrete (YYYY-MM-DD) start across the model, or null. ISO date
+  // strings sort lexicographically, so a string compare gives the min date.
+  function earliestStart(model) {
+    let min = null;
+    for (const t of model.tasks) {
+      if (t.start && P.DATE_RE.test(t.start) && (min === null || t.start < min)) min = t.start;
+    }
+    return min;
+  }
+  function daysBetween(aISO, bISO) {
+    return Math.round((Date.parse(bISO + 'T00:00:00') - Date.parse(aISO + 'T00:00:00')) / 86400000);
+  }
+  // Re-prompt until the user enters a valid YYYY-MM-DD date, or cancels (null).
+  async function promptDate(titleText, initial) {
+    let init = initial;
+    for (;;) {
+      const v = await promptText(titleText, init, 'Create');
+      if (v === null) return null;
+      const s = v.trim();
+      if (P.DATE_RE.test(s)) return s;
+      window.alert('Please enter the date as YYYY-MM-DD.');
+      init = s;
+    }
+  }
+
+  // Create a new project in destDir from sourceMd, shifted to a user-chosen
+  // start: every absolute task date moves by the same offset (durations and
+  // relative "after" gaps preserved), all tasks become unassigned and reset to
+  // To Do, and it's tagged with the active profile. Used by both import and
+  // duplicate.
+  async function importProjectInto(destDir, sourceMd, defaultTitle) {
+    const model = P.parseGantt(P.extractMermaidBlock(sourceMd).code);
+    if (!model.tasks.length) { window.alert('That file has no tasks to import.'); return; }
+
+    const titleInput = await promptText('Import as…', defaultTitle, 'Continue');
+    if (titleInput === null) return;
+    const title = titleInput.trim() || defaultTitle;
+
+    const oldStart = earliestStart(model);
+    const dateTitle = oldStart ? `New start date (was ${oldStart})` : 'New start date (YYYY-MM-DD)';
+    const newStart = await promptDate(dateTitle, oldStart || P.todayISO());
+    if (newStart === null) return;
+
+    const offset = oldStart ? daysBetween(oldStart, newStart) : 0;
+    for (const t of model.tasks) {
+      // Shift absolute dates; durations and "after <id>" gaps ride along
+      // unchanged. A task may encode its end as a date in place of a duration —
+      // shift that too so its length is preserved.
+      if (t.start && P.DATE_RE.test(t.start)) t.start = P.addDays(t.start, offset);
+      if (t.duration && P.DATE_RE.test(t.duration)) t.duration = P.addDays(t.duration, offset);
+      t.assignee = '';     // imported tasks start unassigned
+      t.status = 'todo';   // …and not yet started
+    }
+    model.title = title;
+    model.profile = state.activeProfile || '';
+    model.color = window.Palette.readColor(sourceMd) || ''; // carried in-block
+
+    const md = `# ${title}\n\n\`\`\`mermaid\n${P.serializeGantt(model)}\n\`\`\`\n`;
+
+    // create reserves a unique filename + validates the dir; then we overwrite
+    // its starter template with the shifted project.
+    const file = await window.projects.create(title, destDir, model.profile);
+    await window.projects.write(file, md);
+    collapsed.delete(destDir);
+    await loadProjects(file);
+  }
+
+  async function importIntoFolder(folder) {
+    const picked = await window.projects.pickImport();
+    if (!picked) return;
+    await importProjectInto(folder.path, picked.content, picked.name || 'Imported Project');
+  }
+
+  async function duplicateProject(p) {
+    const md = await window.projects.read(p.file);
+    await importProjectInto(p.folderPath, md, `${p.title} (copy)`);
+  }
+
+  // Choose the workspace for a new project, anchored to the new-project button:
+  // every open workspace, plus "New workspace…" to open a fresh folder on the
+  // spot. Resolves to the chosen directory path, or null if dismissed.
+  function pickWorkspace() {
+    return new Promise((resolve) => {
+      const r = byId('new-project').getBoundingClientRect();
+      let done = false;
+      let chosen = false; // an item was clicked, so closing isn't a cancel
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      const items = [{ header: 'Create project in…' }];
+      for (const f of state.folders) {
+        items.push({ label: f.name, onClick: () => { chosen = true; finish(f.path); } });
+      }
+      if (state.folders.length) items.push({ separator: true });
+      items.push({
+        label: 'New workspace…',
+        onClick: async () => {
+          chosen = true; // set before the await so the dismiss-watcher sees it
+          const folder = await window.projects.addWorkspace();
+          finish(folder ? folder.path : null);
+        },
+      });
+      showContextMenu(r.left, r.bottom + 4, items);
+      // If the menu is dismissed without a choice, resolve null on next tick.
+      // The `chosen` guard stops this firing when "New workspace…" closes the
+      // menu before its OS folder picker has resolved.
+      setTimeout(() => {
+        const obs = new MutationObserver(() => {
+          if (!byId('context-menu')) { obs.disconnect(); if (!chosen) finish(null); }
+        });
+        obs.observe(document.body, { childList: true });
+      }, 0);
+    });
+  }
+
+  // "Open workspace" — link an existing folder on disk.
+  async function openWorkspace() {
+    const folder = await window.projects.addWorkspace();
+    if (!folder) return;
+    collapsed.delete(folder.path);
+    if (state.mode === 'global') return enterGlobal();
+    await loadProjects();
+  }
+
+  // Remove a workspace from the sidebar; the files stay on disk.
+  async function removeWorkspace(folder) {
+    if (!window.confirm(`Close workspace “${folder.name}”?\nThe folder and its files stay on disk.`)) return;
+    await window.projects.removeWorkspace(folder.path);
+    collapsed.delete(folder.path);
+    saveCollapsed();
+    const cur = state.projects.find((p) => p.file === state.currentFile);
+    if (cur && cur.folderPath === folder.path) clearSelection();
+    if (state.mode === 'global') return enterGlobal();
+    await loadProjects(state.currentFile || undefined);
+  }
+
+  async function moveProject(p, folder) {
+    const wasCurrent = state.currentFile === p.file;
+    const newFile = await window.projects.move(p.file, folder.path);
+    collapsed.delete(folder.path);
+    await loadProjects(wasCurrent ? newFile : undefined);
+  }
+
+  async function deleteProject(p) {
+    if (!window.confirm(`Delete project “${p.title}”?\nThis permanently removes ${p.file}.`)) return;
+    await window.projects.remove(p.file);
+    if (state.currentFile === p.file) clearSelection();
+    await loadTeam();
+    if (state.mode === 'global') return enterGlobal();
+    await loadProjects();
+  }
+
+  // ---- right-click context menu ----------------------------------------
+  function openProjectMenu(e, p) {
+    const items = [{ label: 'Reveal in folder', onClick: () => window.projects.revealItem(p.file) }];
+    items.push({ separator: true }, { header: 'Colour' });
+    items.push({ swatches: true, current: p.color, onPick: (hex) => setProjectColor(p, hex) });
+    items.push({ separator: true }, { header: 'Profile' });
+    items.push({ label: '— none —', onClick: () => setProjectProfile(p, '') });
+    for (const name of state.profiles) {
+      items.push({ label: name + (p.profile === name ? '  ✓' : ''), onClick: () => setProjectProfile(p, name) });
+    }
+    const targets = state.folders.filter((f) => f.path !== p.folderPath);
+    if (targets.length) {
+      items.push({ separator: true }, { header: 'Move to workspace' });
+      for (const f of targets) items.push({ label: f.name, onClick: () => moveProject(p, f) });
+    }
+    items.push({ separator: true });
+    items.push({ label: 'Duplicate with new dates…', onClick: () => duplicateProject(p) });
+    items.push({ label: 'Delete project', danger: true, onClick: () => deleteProject(p) });
+    showContextMenu(e.clientX, e.clientY, items);
+  }
+
+  function openFolderMenu(e, folder) {
+    const items = [
+      { label: 'New project here', onClick: () => onNewProject(folder) },
+      { label: 'Import project here…', onClick: () => importIntoFolder(folder) },
+      { label: 'Reveal folder', onClick: () => window.projects.revealItem(folder.path) },
+      { separator: true },
+      { label: 'Close workspace', danger: true, onClick: () => removeWorkspace(folder) },
+    ];
+    showContextMenu(e.clientX, e.clientY, items);
+  }
+
+  function closeContextMenu() {
+    const m = byId('context-menu');
+    if (m) m.remove();
+  }
+  document.addEventListener('click', closeContextMenu);
+  document.addEventListener('contextmenu', (e) => {
+    // Close a menu when right-clicking elsewhere (handlers re-open as needed).
+    if (!e.target.closest('.project-item, .folder-head')) closeContextMenu();
+  });
+  window.addEventListener('blur', closeContextMenu);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeContextMenu(); });
+
+  function showContextMenu(x, y, items, opts) {
+    closeContextMenu();
+    const menu = document.createElement('div');
+    menu.id = 'context-menu';
+    menu.className = 'context-menu';
+    // Let callers pin the menu width (the profile switcher matches the sidebar).
+    if (opts && opts.width) { menu.style.minWidth = opts.width + 'px'; menu.style.width = opts.width + 'px'; }
+    for (const it of items) {
+      if (it.separator) {
+        const s = document.createElement('div');
+        s.className = 'ctx-sep';
+        menu.appendChild(s);
+      } else if (it.header) {
+        const h = document.createElement('div');
+        h.className = 'ctx-header';
+        h.textContent = it.header;
+        menu.appendChild(h);
+      } else if (it.swatches) {
+        const grid = document.createElement('div');
+        grid.className = 'ctx-swatches';
+        const cur = String(it.current || '').toLowerCase();
+        for (const preset of window.Palette.PRESETS) {
+          const b = document.createElement('button');
+          b.className = 'swatch' + (preset.hex.toLowerCase() === cur ? ' selected' : '');
+          b.style.background = preset.hex;
+          b.title = preset.name;
+          b.addEventListener('click', (ev) => { ev.stopPropagation(); closeContextMenu(); it.onPick(preset.hex); });
+          grid.appendChild(b);
+        }
+        menu.appendChild(grid);
+      } else {
+        const b = document.createElement('button');
+        b.className = 'ctx-item' + (it.danger ? ' danger' : '');
+        b.textContent = it.label;
+        b.addEventListener('click', (ev) => { ev.stopPropagation(); closeContextMenu(); it.onClick(); });
+        menu.appendChild(b);
+      }
+    }
+    document.body.appendChild(menu);
+    // Keep the menu inside the viewport. The incoming x/y and the rects below
+    // are device pixels (getBoundingClientRect / clientX already reflect the
+    // page `zoom`), but the values we write to style.left/top are *layout*
+    // pixels that the browser then multiplies by `zoom`. Divide the clamped
+    // device-px position by the zoom factor so the menu lands where intended —
+    // otherwise it renders 1.2× too far down/right and falls off-screen.
+    const r = menu.getBoundingClientRect();
+    const zoom = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    const left = Math.min(x, window.innerWidth - r.width - 6);
+    const top = Math.min(y, window.innerHeight - r.height - 6);
+    menu.style.left = Math.max(0, left) / zoom + 'px';
+    menu.style.top = Math.max(0, top) / zoom + 'px';
+  }
+
+  // Promise-based text prompt. Resolves to the entered string, or null on
+  // cancel / Escape / backdrop click.
+  function promptText(titleText, initial, okLabel) {
+    const backdrop = byId('prompt-backdrop');
+    const input = byId('prompt-input');
+    byId('prompt-title').textContent = titleText;
+    byId('prompt-ok').textContent = okLabel || 'OK';
+    input.value = initial || '';
+
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        backdrop.hidden = true;
+        byId('prompt-form').removeEventListener('submit', onSubmit);
+        byId('prompt-cancel').removeEventListener('click', onCancel);
+        backdrop.removeEventListener('mousedown', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        resolve(val);
+      };
+      const onSubmit = (e) => { e.preventDefault(); finish(input.value); };
+      const onCancel = () => finish(null);
+      const onBackdrop = (e) => { if (e.target === backdrop) finish(null); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+
+      byId('prompt-form').addEventListener('submit', onSubmit);
+      byId('prompt-cancel').addEventListener('click', onCancel);
+      backdrop.addEventListener('mousedown', onBackdrop);
+      document.addEventListener('keydown', onKey);
+
+      backdrop.hidden = false;
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+    });
+  }
+
+  // New-project dialog: a name field plus a profile picker. Defaults the profile
+  // to whichever one is active (or "No profile" under "All projects"). Resolves
+  // { title, profile } on Create, or null if cancelled.
+  function promptNewProject(initialTitle, defaultProfile) {
+    const backdrop = byId('newproj-backdrop');
+    const nameInput = byId('newproj-name');
+    const profileSel = byId('newproj-profile');
+    nameInput.value = initialTitle || '';
+
+    // Rebuild the profile options each time so newly added profiles show up.
+    profileSel.innerHTML = '';
+    const opts = [['', 'No profile (all)'], ...state.profiles.map((p) => [p, p])];
+    for (const [value, label] of opts) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = label;
+      profileSel.appendChild(o);
+    }
+    profileSel.value = state.profiles.includes(defaultProfile) ? defaultProfile : '';
+
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        backdrop.hidden = true;
+        byId('newproj-form').removeEventListener('submit', onSubmit);
+        byId('newproj-cancel').removeEventListener('click', onCancel);
+        backdrop.removeEventListener('mousedown', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        resolve(val);
+      };
+      const onSubmit = (e) => { e.preventDefault(); finish({ title: nameInput.value, profile: profileSel.value }); };
+      const onCancel = () => finish(null);
+      const onBackdrop = (e) => { if (e.target === backdrop) finish(null); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+
+      byId('newproj-form').addEventListener('submit', onSubmit);
+      byId('newproj-cancel').addEventListener('click', onCancel);
+      backdrop.addEventListener('mousedown', onBackdrop);
+      document.addEventListener('keydown', onKey);
+
+      backdrop.hidden = false;
+      setTimeout(() => { nameInput.focus(); nameInput.select(); }, 0);
+    });
+  }
+
+  // Promise-based confirm dialog. Resolves true on confirm, false on cancel /
+  // Escape / backdrop click. opts: { okLabel, cancelLabel, danger, swap }.
+  // `swap` flips the button order (Confirm on the left) so a second prompt
+  // can't be dismissed by reflex.
+  function confirmDialog(message, opts) {
+    opts = opts || {};
+    const backdrop = byId('confirm-backdrop');
+    const actions = byId('confirm-actions');
+    byId('confirm-message').textContent = message;
+
+    return new Promise((resolve) => {
+      let done = false;
+      const onBackdrop = (e) => { if (e.target === backdrop) finish(false); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+      function finish(val) {
+        if (done) return;
+        done = true;
+        backdrop.hidden = true;
+        actions.innerHTML = '';
+        backdrop.removeEventListener('mousedown', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        resolve(val);
+      }
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = opts.cancelLabel || 'Cancel';
+      cancelBtn.addEventListener('click', () => finish(false));
+
+      const okBtn = document.createElement('button');
+      okBtn.type = 'button';
+      okBtn.textContent = opts.okLabel || 'OK';
+      if (opts.danger) okBtn.className = 'danger';
+      okBtn.addEventListener('click', () => finish(true));
+
+      actions.innerHTML = '';
+      if (opts.swap) { actions.appendChild(okBtn); actions.appendChild(cancelBtn); }
+      else { actions.appendChild(cancelBtn); actions.appendChild(okBtn); }
+
+      backdrop.addEventListener('mousedown', onBackdrop);
+      document.addEventListener('keydown', onKey);
+      backdrop.hidden = false;
+    });
+  }
+
+  // ---- profiles ---------------------------------------------------------
+  function loadProfileRoster() {
+    try { return JSON.parse(localStorage.getItem('profileRoster') || '[]'); }
+    catch { return []; }
+  }
+  function saveProfiles() {
+    localStorage.setItem('profileRoster', JSON.stringify(state.profiles));
+  }
+
+  // Roster = persisted profile names + any profile tag found on a project.
+  function loadProfiles() {
+    const set = new Set(loadProfileRoster().map((s) => String(s).trim()).filter(Boolean));
+    for (const p of state.projects) if (p.profile) set.add(p.profile.trim());
+    state.profiles = [...set].sort((a, b) => a.localeCompare(b));
+    saveProfiles();
+    state.activeProfile = localStorage.getItem('activeProfile') || '';
+    if (state.activeProfile && !state.profiles.includes(state.activeProfile)) state.activeProfile = '';
+    updateProfileLabel();
+  }
+
+  function updateProfileLabel() {
+    byId('active-profile').textContent = state.activeProfile || 'All projects';
+  }
+
+  async function setActiveProfile(name) {
+    state.activeProfile = name || '';
+    localStorage.setItem('activeProfile', state.activeProfile);
+    updateProfileLabel();
+    await loadTeam();            // roster is per-profile, so it changes here
+    renderProjectList();
+    // The global view is scoped to the active profile, so rebuild it from the
+    // newly-filtered project set; a single project view just re-renders.
+    if (state.mode === 'global') await enterGlobal();
+    else rerender();            // Team view columns follow the new roster
+  }
+
+  // Bottom-bar dropdown: pick a profile, or open Settings. Anchored to the
+  // switcher; showContextMenu clamps it into view (so it opens upward here).
+  function openProfileMenu(e) {
+    if (e) e.stopPropagation(); // don't let this click reach the doc-level menu closer
+    const r = byId('profile-switcher').getBoundingClientRect();
+    const items = [{ label: 'All projects' + (!state.activeProfile ? '  ✓' : ''), onClick: () => setActiveProfile('') }];
+    for (const name of state.profiles) {
+      items.push({ label: name + (state.activeProfile === name ? '  ✓' : ''), onClick: () => setActiveProfile(name) });
+    }
+    items.push({ separator: true }, { label: '⚙ Settings…', onClick: openSettings });
+    // Match the dropdown to the sidebar's width so it reads as part of the bar.
+    // Rects are device px (page zoom); convert to the layout px we write to CSS.
+    const zoom = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    const sb = byId('sidebar').getBoundingClientRect();
+    showContextMenu(sb.left, r.bottom, items, { width: Math.round(sb.width / zoom) });
+  }
+
+  async function renderProfiles() {
+    const wrap = byId('profiles-list');
+    wrap.innerHTML = '';
+    if (!state.profiles.length) {
+      const e = document.createElement('div');
+      e.className = 'tm-empty';
+      e.textContent = 'No profiles yet. Add one below.';
+      wrap.appendChild(e);
+      return;
+    }
+    const counts = new Map();
+    for (const p of state.projects) if (p.profile) counts.set(p.profile, (counts.get(p.profile) || 0) + 1);
+    for (const name of state.profiles) {
+      const n = counts.get(name) || 0;
+      const row = document.createElement('div');
+      row.className = 'tm-row';
+      row.innerHTML =
+        `<span class="tm-name"></span>` +
+        `<span class="tm-count">${n} project${n === 1 ? '' : 's'}</span>` +
+        `<button class="tm-menu" title="Actions" aria-label="Actions">⋮</button>`;
+      row.querySelector('.tm-name').textContent = name;
+      row.querySelector('.tm-menu').addEventListener('click', (e) => {
+        e.stopPropagation();
+        showContextMenu(e.clientX, e.clientY, [
+          { label: 'Rename', onClick: () => renameProfile(name) },
+          { separator: true },
+          { label: 'Delete', danger: true, onClick: () => removeProfile(name, n) },
+        ]);
+      });
+      wrap.appendChild(row);
+    }
+  }
+
+  async function addProfile() {
+    const name = await promptText('Add profile', '', 'Add');
+    if (name === null) return;
+    const n = name.trim();
+    if (n && !state.profiles.includes(n)) {
+      state.profiles.push(n);
+      state.profiles.sort((a, b) => a.localeCompare(b));
+      saveProfiles();
+    }
+    renderProfiles();
+  }
+
+  async function renameProfile(oldName) {
+    const next = await promptText('Rename profile', oldName, 'Rename');
+    if (next === null) return;
+    const newName = next.trim();
+    if (!newName || newName === oldName) return;
+    await applyProfileRename(oldName, newName);
+    renameRosterBucket(oldName, newName); // the profile's team follows the rename
+    state.profiles = state.profiles.filter((n) => n !== oldName);
+    if (!state.profiles.includes(newName)) state.profiles.push(newName);
+    state.profiles.sort((a, b) => a.localeCompare(b));
+    if (state.activeProfile === oldName) state.activeProfile = newName;
+    if (state.teamEditProfile === oldName) state.teamEditProfile = newName;
+    saveProfiles();
+    localStorage.setItem('activeProfile', state.activeProfile);
+    await refreshAfterProfileChange();
+    renderProfiles();
+  }
+
+  async function removeProfile(name, count) {
+    const msg = count
+      ? `Delete profile “${name}”? Its ${count} project${count === 1 ? '' : 's'} will become untagged.`
+      : `Delete profile “${name}”?`;
+    if (!window.confirm(msg)) return;
+    if (count) await applyProfileRename(name, '');
+    dropRosterBucket(name); // its team is deleted along with the profile
+    state.profiles = state.profiles.filter((n) => n !== name);
+    if (state.activeProfile === name) state.activeProfile = '';
+    if (state.teamEditProfile === name) state.teamEditProfile = '';
+    saveProfiles();
+    localStorage.setItem('activeProfile', state.activeProfile);
+    await refreshAfterProfileChange();
+    renderProfiles();
+  }
+
+  // Rewrite the profile tag on every project currently tagged `oldName`.
+  async function applyProfileRename(oldName, newName) {
+    for (const p of state.projects) {
+      if (p.profile !== oldName) continue;
+      let md;
+      try { md = await window.projects.read(p.file); } catch { continue; }
+      const m = P.parseGantt(P.extractMermaidBlock(md).code);
+      m.profile = newName;
+      await window.projects.write(p.file, P.writeBackToMarkdown(md, m));
+    }
+  }
+
+  async function refreshAfterProfileChange() {
+    updateProfileLabel();
+    await loadProjects(state.currentFile || undefined);
+    await loadTeam(); // the active profile (and its roster) may have changed
+    if (state.mode === 'global') await enterGlobal();
+  }
+
+  // Set one project's profile (from its right-click menu).
+  async function setProjectProfile(p, name) {
+    const md = await window.projects.read(p.file);
+    const m = P.parseGantt(P.extractMermaidBlock(md).code);
+    m.profile = name || '';
+    const newMd = P.writeBackToMarkdown(md, m);
+    await window.projects.write(p.file, newMd);
+
+    p.profile = name || '';
+    const meta = state.projects.find((x) => x.file === p.file);
+    if (meta) meta.profile = name || '';
+    if (name && !state.profiles.includes(name)) {
+      state.profiles.push(name);
+      state.profiles.sort((a, b) => a.localeCompare(b));
+      saveProfiles();
+    }
+    if (state.currentFile === p.file) { state.rawMd = newMd; if (state.model) state.model.profile = name || ''; }
+    renderProjectList();
+  }
+
+  // ---- project colour (set from the project right-click menu) ----------
+  async function setProjectColor(p, hex) {
+    const md = await window.projects.read(p.file);
+    const newMd = window.Palette.writeColor(md, hex);
+    await window.projects.write(p.file, newMd);
+
+    p.color = hex;
+    const meta = state.projects.find((x) => x.file === p.file);
+    if (meta) meta.color = hex;
+    const dot = document.querySelector(`.project-item[data-file="${CSS.escape(p.file)}"] .pi-dot`);
+    if (dot) dot.style.background = hex;
+
+    // Reflect the change live if the project is currently open / in the global
+    // view. Sync state.model.color too: colour now lives in the mermaid block,
+    // so a later task edit re-serializes the model — a stale colour there would
+    // overwrite the one we just wrote.
+    if (state.currentFile === p.file) {
+      state.rawMd = newMd;
+      state.color = hex;
+      if (state.model) state.model.color = hex;
+    }
+    const g = state.global.find((x) => x.file === p.file);
+    if (g) g.color = hex;
+    rerender();
+  }
+
+  // ---- helpers ----------------------------------------------------------
+  function byId(id) { return document.getElementById(id); }
+
+  // ---- boot -------------------------------------------------------------
+  // Show the app version in the Settings header (best-effort; non-fatal).
+  window.appInfo?.getVersion().then((v) => {
+    const el = byId('settings-app-version');
+    if (el && v) el.textContent = 'v' + v;
+  }).catch(() => {});
+
+  (async function init() {
+    await loadProjects();
+    loadProfiles();      // sets state.activeProfile before the roster is built
+    migrateRoster();     // fold any legacy flat roster into the shared bucket
+    await loadTeam();    // roster is scoped to the active profile
+    renderProjectList(); // re-render now that the active profile filter is known
+
+    // Restore the last-used view (Task List / Timeline / Team).
+    const savedView = localStorage.getItem('lastView');
+    if (['kanban', 'gantt', 'team'].includes(savedView)) state.view = savedView;
+
+    // Reopen where the user left off: the global view, the same project, or —
+    // failing that (e.g. everything was deleted) — straight to a blank global
+    // view rather than the empty "No project selected" placeholder.
+    const savedMode = localStorage.getItem('lastMode');
+    const savedFile = localStorage.getItem('lastFile');
+    const reopen = savedFile && state.projects.find((p) => p.file === savedFile && inActiveProfile(p));
+    const first = state.projects.find(inActiveProfile);
+    if (savedMode === 'global' || !first) await enterGlobal();
+    else if (reopen) selectProject(savedFile);
+    else selectProject(first.file);
+  })();
+})();

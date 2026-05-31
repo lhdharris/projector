@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Diagonal grey (top-left) to white (bottom-right). -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bcbec3"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="200" ry="200" fill="url(#bg)"/>
+  <!-- Red counter ("flag") sits behind the P; the P's evenodd hole reveals it. -->
+  <path transform="translate(512,512) scale(1.0676) translate(-514,-514)"
+        d="M 445.00 345.00 Q 445.00 335.00 455.00 335.00 L 573.00 335.00 Q 583.00 335.00 583.00 345.00 L 583.00 451.00 Q 583.00 461.00 573.00 461.00 L 455.00 461.00 Q 445.00 461.00 445.00 451.00 Z"
+        fill="#DC2626"/>
+  <path transform="translate(512,512) scale(1.0676) translate(-514,-514)"
+        d="M 355.00 350.00 Q 355.00 245.00 460.00 245.00 L 568.00 245.00 Q 673.00 245.00 673.00 350.00 L 673.00 551.00 Q 673.00 551.00 673.00 551.00 L 445.00 551.00 Q 445.00 551.00 445.00 551.00 L 445.00 783.00 Q 445.00 783.00 445.00 783.00 L 445.00 783.00 Q 355.00 783.00 355.00 693.00 Z M 445.00 345.00 Q 445.00 335.00 455.00 335.00 L 573.00 335.00 Q 583.00 335.00 583.00 345.00 L 583.00 451.00 Q 583.00 461.00 573.00 461.00 L 455.00 461.00 Q 445.00 461.00 445.00 451.00 Z"
+        fill="#2B2E36" fill-rule="evenodd"/>
+</svg>

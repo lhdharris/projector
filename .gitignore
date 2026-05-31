@@ -1,0 +1,14 @@
+# Dependencies (reinstalled per-platform; native modules are not portable)
+**/node_modules/
+
+# Build output (installers are attached to GitHub releases, not committed)
+electron-app/dist/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+
+# Unrelated project that lives under res/ but has its own git repo
+# (lhdharris/folia-browser) — not part of Projector.
+res/tabless-browser/

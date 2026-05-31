@@ -1,0 +1,1012 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* The `hidden` attribute must win over author display rules (#kanban,
+   #empty-state, etc. set display:flex, which otherwise overrides the UA
+   [hidden] rule and leaves "hidden" overlays on top, eating clicks). */
+[hidden] { display: none !important; }
+
+/* Scale the whole UI up ~20% so buttons/controls aren't so tiny. zoom keeps
+   the layout (and the position:fixed #app) intact while enlarging everything
+   uniformly, including the Gantt chart. */
+html { zoom: 1.2; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  color: #222;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #9a9a9a;
+  overflow: hidden;
+}
+
+/* ---- top bar (minimalist frameless chrome) ---- */
+#toolbar {
+  flex: 0 0 48px;
+  display: flex;
+  align-items: center;
+  background: #ececec;
+  border-bottom: 1px solid #b8b8b8;
+  padding: 0 8px;
+  gap: 8px;
+  position: relative;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+#toolbar button,
+#toolbar input,
+#view-toggle { -webkit-app-region: no-drag; }
+
+#drag-space { flex: 1; height: 100%; min-width: 0; }
+
+/* Pinned to the centre of the top bar, independent of the side content. */
+#view-toggle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  background: #e0e0e0;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+#view-toggle[hidden] { display: none; }
+.seg-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: #555;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.seg-btn:hover { background: rgba(0, 0, 0, 0.06); }
+.seg-btn.active {
+  background: #ffffff;
+  color: #1a1a1a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.text-btn {
+  border: none;
+  background: transparent;
+  color: #555;
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.text-btn:hover { background: rgba(0, 0, 0, 0.08); }
+
+/* ---- colour swatches (project right-click menu) ---- */
+.swatch {
+  width: 26px; height: 26px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.swatch:hover { transform: scale(1.08); }
+.swatch.selected { border-color: #1a5b7a; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 0 0 2px rgba(137, 207, 240, 0.4); }
+
+/* window controls */
+#wm-buttons { display: flex; align-items: center; gap: 2px; }
+#toolbar #wm-buttons button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #444;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+/* Hover/press feedback. These must carry the same #toolbar #wm-buttons IDs as
+   the base rule above, otherwise its `background: transparent` out-specifies
+   them and the buttons never light up. Suppress :hover until the mouse actually
+   moves inside the window (the .no-hover guard), matching the tabless-browser
+   chrome — a window opening under the cursor shouldn't flash the close button
+   red before the user has moved. */
+body:not(.no-hover) #toolbar #wm-buttons button:hover { background: rgba(0, 0, 0, 0.08); }
+#toolbar #wm-buttons button:active { background: rgba(0, 0, 0, 0.14); }
+/* Close gets the red treatment. It needs #wm-buttons in the selector too, or
+   the general button:hover above (one extra element) out-specifies it and the
+   close button just goes grey. */
+body:not(.no-hover) #toolbar #wm-buttons #close:hover { background: #e81123; color: #fff; }
+#toolbar #wm-buttons #close:active { background: #c50f1f; color: #fff; }
+
+/* ---- body layout ---- */
+#body { flex: 1 1 auto; display: flex; min-height: 0; }
+
+#sidebar {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  background: #f6f6f6;
+  border-right: 1px solid #e2e2e2;
+  min-height: 0;
+}
+#sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #999;
+}
+.head-actions { display: flex; align-items: center; gap: 2px; }
+#new-project, #new-folder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px; height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #666;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+#new-project:hover, #new-folder:hover { background: rgba(0, 0, 0, 0.08); color: #222; }
+#new-folder svg { display: block; }
+
+#project-list { flex: 1 1 auto; overflow-y: auto; padding: 4px 8px; }
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: #333;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.project-item:hover { background: rgba(0, 0, 0, 0.05); }
+.project-item.active { background: #e3eef4; color: #1a5b7a; font-weight: 500; }
+.pi-dot {
+  flex: 0 0 auto;
+  width: 13px; height: 13px;
+  border-radius: 4px;
+  background: #ccc;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
+}
+.pi-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-item.dragging { opacity: 0.5; }
+.list-empty { padding: 10px; color: #aaa; font-size: 13px; font-style: italic; }
+
+/* ---- sidebar folders ---- */
+.folder-group { margin-top: 2px; }
+.folder-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #555;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+.folder-head:hover { background: rgba(0, 0, 0, 0.05); }
+.folder-head.drop-target { background: #e3eef4; box-shadow: inset 0 0 0 1px #89cff0; }
+.folder-caret {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: #999;
+  transition: transform 0.12s;
+}
+.folder-head.collapsed .folder-caret { transform: rotate(-90deg); }
+.folder-link { flex: 0 0 auto; font-size: 11px; color: #4a8fb0; }
+.folder-head.external .folder-name { color: #356b87; }
+.folder-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-head .count {
+  flex: 0 0 auto;
+  background: #dcdcdc;
+  color: #777;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 9px;
+  padding: 0 7px;
+}
+.folder-add {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px; height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #888;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.folder-add:hover { background: rgba(0, 0, 0, 0.1); color: #222; }
+.folder-body { padding-left: 12px; }
+.folder-body .list-empty { padding: 6px 10px; font-size: 12px; }
+
+/* ---- right-click context menu ---- */
+.context-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 168px;
+  padding: 5px;
+  background: #fff;
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: #333;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ctx-item:hover { background: rgba(0, 0, 0, 0.06); }
+.ctx-item.danger { color: #b3261e; }
+.ctx-item.danger:hover { background: #fbeae7; }
+.ctx-header {
+  padding: 6px 10px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #aaa;
+}
+.ctx-sep { height: 1px; margin: 5px 6px; background: #ececec; }
+.ctx-swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 4px 10px 8px; }
+
+/* Global view sidebar entry */
+#global-view-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 4px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #555;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+#global-view-btn svg { flex: 0 0 auto; color: #888; }
+#global-view-btn:hover { background: rgba(0, 0, 0, 0.05); }
+#global-view-btn.active { background: #e3eef4; color: #1a5b7a; font-weight: 500; }
+#global-view-btn.active svg { color: #1a5b7a; }
+
+/* ---- bottom-bar profile switcher ---- */
+#profile-switcher {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 14px;
+  border: none;
+  border-top: 1px solid #e2e2e2;
+  background: #f6f6f6;
+  color: #444;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+#profile-switcher:hover { background: #eee; }
+#active-profile { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-caret { flex: 0 0 auto; font-size: 10px; color: #999; }
+
+#main { flex: 1 1 auto; min-width: 0; position: relative; display: flex; flex-direction: column; }
+
+.centered { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.empty-inner { text-align: center; color: #999; }
+.empty-title { font-size: 18px; font-weight: 500; color: #777; margin-bottom: 6px; }
+.empty-detail { font-size: 14px; color: #aaa; }
+
+/* ---- global view container ---- */
+#global { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#global[hidden] { display: none; }
+#global-kanban[hidden], #global-gantt[hidden] { display: none; }
+
+/* ---- kanban ---- */
+#kanban, #global-kanban {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 14px;
+  padding: 18px;
+  overflow-x: auto;
+  align-items: flex-start;
+  background: #fafafa;
+}
+
+/* ---- team (board of per-person columns) ---- */
+#team, #global-team {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  background: #fafafa;
+}
+#team[hidden], #global-team[hidden] { display: none; }
+.team-board {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 14px;
+  padding: 18px;
+  overflow-x: auto;
+  align-items: flex-start;
+}
+
+/* Team-card status: done is greyed back, in-progress is ringed (the neon ring
+   colour itself is set inline per-card from the project hue). */
+.team-col .card { position: relative; }
+.team-col .card.done { opacity: 0.5; }
+.team-col .card.done:hover { opacity: 0.8; }
+/* Pending status change: fade + shrink briefly before the card reshuffles. */
+.team-col .card.status-moving {
+  opacity: 0.35;
+  transform: scale(0.97);
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+/* Inline status tag under the card title; click opens the status picker. */
+.card-status-row { margin-top: 7px; }
+.card-status-tag {
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+.card-status-tag::after { content: ' ▾'; opacity: 0.55; font-size: 10px; }
+.card-status-tag:hover { filter: brightness(0.95); }
+
+/* Column "⋮" menu button in the team-column header. */
+.col-menu-btn {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: #999;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  margin-left: 4px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.col-menu-btn:hover { background: rgba(0, 0, 0, 0.08); color: #444; }
+
+/* Small popup shared by the status picker and the column "⋮" menu. */
+.team-popup {
+  position: fixed;
+  z-index: 300;
+  min-width: 150px;
+  padding: 5px;
+  background: #fff;
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+.team-popup-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: #333;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.team-popup-item:hover { background: rgba(0, 0, 0, 0.06); }
+.team-popup-item.checked { font-weight: 600; color: #1a5b7a; }
+.team-popup-item.danger { color: #b3261e; }
+.team-popup-item.danger:hover { background: #fbeae7; }
+
+/* Team columns are people; tint the Unassigned column so it reads as a catch-all. */
+.team-col.unassigned { background: #ececec; border-style: dashed; }
+.team-col .team-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-empty { margin: 40px auto; color: #999; font-size: 15px; font-style: italic; }
+
+/* ---- settings panel (profiles + team) ---- */
+#settings-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 205;
+}
+#settings-backdrop[hidden] { display: none; }
+#settings-modal {
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  /* Rounded frame; clips the (rare) fallback scrollbar to the corners. */
+  overflow: hidden;
+}
+/* Fixed-height flex column. The app header (top) and Done bar (bottom) keep
+   their size and stay pinned; only #settings-scroll between them scrolls, so the
+   scrollbar belongs to that middle region rather than the whole dialog. Height
+   is capped to the window in JS (fitSettingsHeight) — a `vh` cap can't be used
+   because the page `zoom` inflates it. */
+#settings-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* The scrolling subsection: takes the height left between the pinned header and
+   footer and scrolls its own content (Settings title, the two lists, danger
+   zone) when the window is too short to show it all. */
+#settings-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+#settings-appheader {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #ededed;
+}
+#settings-app-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  flex: none;
+}
+.settings-app-meta { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.settings-app-name { font-size: 17px; font-weight: 600; color: #2a2a2a; }
+.settings-app-version { font-size: 12px; color: #9a9a9a; }
+#settings-title { font-size: 17px; font-weight: 600; color: #2a2a2a; margin-bottom: 16px; }
+.settings-section { margin-bottom: 18px; }
+.settings-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: #999; margin-bottom: 8px;
+}
+.settings-add {
+  border: none; background: transparent; color: #3f9fe0;
+  font: inherit; font-size: 12px; font-weight: 600; padding: 2px 4px;
+  border-radius: 5px; cursor: pointer; text-transform: none; letter-spacing: 0;
+}
+.settings-add:hover { background: rgba(63, 159, 224, 0.1); }
+.settings-head-right { display: flex; align-items: center; gap: 6px; }
+.settings-select {
+  font: inherit; font-size: 12px; color: #444;
+  text-transform: none; letter-spacing: 0;
+  padding: 3px 6px; border: 1px solid #d8d8d8; border-radius: 5px;
+  background: #fff; cursor: pointer; max-width: 150px;
+}
+.settings-select:focus { outline: none; border-color: #89cff0; }
+/* Natural height — they grow with their rows and the whole lot scrolls together
+   inside #settings-scroll, rather than each list scrolling on its own. */
+#profiles-list, #team-members { display: flex; flex-direction: column; gap: 6px; }
+.tm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid #ececec;
+  border-radius: 6px;
+}
+.tm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #333; }
+.tm-count { flex: 0 0 auto; font-size: 12px; color: #999; }
+.tm-row button {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: #6a6a6a;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.tm-row button:hover { background: rgba(0, 0, 0, 0.07); color: #222; }
+.tm-row button.danger:hover { background: #fbeae7; color: #b3261e; }
+.tm-menu { font-size: 16px; line-height: 1; color: #999; padding: 2px 6px; }
+.tm-empty { padding: 12px; color: #aaa; font-size: 13px; font-style: italic; text-align: center; }
+#settings-actions { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 20px; border-top: 1px solid #ededed; }
+#settings-actions .spacer { flex: 1; }
+#settings-actions button {
+  font: inherit; font-size: 14px;
+  padding: 7px 16px; border-radius: 6px;
+  border: 1px solid #cfcfcf; background: #fff; color: #333; cursor: pointer;
+}
+#settings-actions button:hover { background: #f3f3f3; }
+#settings-actions .primary { background: #3f9fe0; border-color: #3f9fe0; color: #fff; font-weight: 600; }
+#settings-actions .primary:hover { background: #2e8fd2; }
+
+/* Status pills on Team cards (Kanban shows status via the column instead). */
+.badge.status-todo   { background: #ececec; color: #777; }
+.badge.status-active { background: #d7eefb; color: #1a5b7a; }
+.badge.status-done   { background: #d7ecdd; color: #3f7d54; }
+.kanban-col {
+  flex: 1 1 0;
+  min-width: 240px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  background: #f1f1f1;
+  border: 1px solid #e4e4e4;
+  border-radius: 10px;
+  padding: 10px;
+  max-height: 100%;
+  transition: background 0.12s, box-shadow 0.12s;
+}
+.kanban-col.drag-over {
+  background: #e7f2f8;
+  box-shadow: inset 0 0 0 2px #89cff0;
+}
+.kanban-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #666;
+  padding: 2px 6px 10px;
+}
+.kanban-col-head .count {
+  background: #dcdcdc;
+  color: #777;
+  font-size: 12px;
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+.kanban-list { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 8px; }
+/* Room so the in-progress neon ring (a 2px box-shadow) isn't clipped by the
+   column's scroll overflow. */
+.team-col .kanban-list { padding: 3px; }
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e4e4e4;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.12s, transform 0.06s, border-color 0.12s;
+}
+.card:hover { box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1); border-color: #d0d0d0; }
+.card.dragging { opacity: 0.5; }
+.card.crit { border-left: 3px solid #e8694a; }
+.card.milestone { border-left: 3px solid #b08cd9; }
+.card-name { font-size: 14px; font-weight: 500; color: #2a2a2a; line-height: 1.35; }
+.card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #eee;
+  color: #777;
+  letter-spacing: 0.01em;
+}
+.badge.crit { background: #fbe4dd; color: #a83b22; }
+.badge.ms { background: #efe4f7; color: #6f4a99; }
+.badge.card-project { font-weight: 700; }
+.card-dates { margin-top: 7px; font-size: 12px; color: #999; }
+
+.kanban-add {
+  margin-top: 8px;
+  border: 1px dashed #cfcfcf;
+  background: transparent;
+  color: #888;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.kanban-add:hover { background: rgba(0, 0, 0, 0.04); color: #555; border-color: #b8b8b8; }
+
+/* ---- gantt (shared by the project gantt and the global gantt) ---- */
+#gantt, #global-gantt { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: #fafafa; }
+.gantt-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 18px;
+  border-bottom: 1px solid #ececec;
+  background: #fafafa;
+}
+.gantt-zoom {
+  display: flex;
+  align-items: center;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.gantt-zoom button {
+  border: none;
+  background: #fff;
+  color: #555;
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-right: 1px solid #ececec;
+}
+.gantt-zoom button:last-child { border-right: none; }
+.gantt-zoom button:hover { background: #f0f0f0; }
+#gantt-zoom-out, #gantt-zoom-in, #g-zoom-out, #g-zoom-in { font-size: 16px; line-height: 1; width: 34px; }
+#gantt-zoom-label, #g-zoom-label { font-size: 12px; min-width: 52px; font-variant-numeric: tabular-nums; }
+
+.gantt-scroll { flex: 1 1 auto; overflow: auto; padding: 24px; background: #ffffff; }
+/* When the chart is empty (or errored) there's no wide SVG to scroll, so centre
+   the placeholder message in the viewport instead of leaving it pinned left
+   against the inline-block render container. */
+.gantt-scroll:has(.gantt-empty),
+.gantt-scroll:has(.gantt-error) { display: flex; align-items: center; justify-content: center; }
+.gantt-scroll:has(.gantt-empty) #global-gantt-render,
+.gantt-scroll:has(.gantt-empty) #gantt-render { margin: auto; }
+#gantt-render, #global-gantt-render { min-width: 0; display: inline-block; }
+#gantt-render svg, #global-gantt-render svg { max-width: none; display: block; }
+/* Mermaid renders the date gridlines with a mix of inherited/sub-pixel stroke
+   widths, so some lines look heavier than others. Pin them to a uniform 1px,
+   crisply aligned, so the timeline grid reads as evenly spaced. */
+#gantt-render .grid .tick line,
+#global-gantt-render .grid .tick line {
+  stroke: #e2e2e2;
+  stroke-width: 1px;
+  shape-rendering: crispEdges;
+}
+/* Clickable task bars + labels */
+.gantt-clickable { cursor: pointer; }
+rect.task.gantt-clickable:hover { filter: brightness(0.94); }
+/* Task labels sit on top of the bars; let clicks pass through to the bar so
+   hovering the task name still opens the editor. */
+#gantt-render text, #global-gantt-render text { pointer-events: none; }
+.gantt-empty, .gantt-error { color: #999; font-size: 15px; max-width: 520px; margin: 40px auto; text-align: center; }
+.gantt-error-title { font-weight: 600; color: #a83b22; margin-bottom: 8px; }
+.gantt-error pre {
+  text-align: left;
+  background: #faf2f0;
+  border: 1px solid #f0d8d2;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  color: #7a3a2a;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 8px 0;
+}
+
+/* ---- settings danger zone ---- */
+.settings-danger-zone { border-top: 1px solid #f0dada; padding-top: 14px; }
+.clear-all-btn {
+  width: 100%;
+  font: inherit; font-size: 14px; font-weight: 600;
+  padding: 9px 16px; border-radius: 6px;
+  border: 1px solid #e7c4bc; background: #fdf3f1; color: #b3261e;
+  cursor: pointer;
+}
+.clear-all-btn:hover { background: #fbeae7; border-color: #e0a99f; }
+.settings-danger-note { margin-top: 8px; font-size: 12px; color: #999; line-height: 1.4; }
+.settings-danger-note code { font-size: 11px; background: #f1f1f1; padding: 0 4px; border-radius: 3px; }
+
+/* ---- confirm dialog (two-step reset) ---- */
+#confirm-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 220;
+}
+#confirm-backdrop[hidden] { display: none; }
+#confirm-modal {
+  width: 380px;
+  max-width: calc(100vw - 40px);
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  padding: 22px;
+}
+#confirm-message { font-size: 15px; font-weight: 500; color: #2a2a2a; line-height: 1.5; margin-bottom: 18px; }
+#confirm-actions { display: flex; gap: 10px; }
+#confirm-actions button {
+  flex: 1 1 0;
+  font: inherit; font-size: 14px;
+  padding: 9px 16px; border-radius: 6px;
+  border: 1px solid #cfcfcf; background: #fff; color: #333; cursor: pointer;
+}
+#confirm-actions button:hover { background: #f3f3f3; }
+#confirm-actions button.danger { background: #d93025; border-color: #d93025; color: #fff; font-weight: 600; }
+#confirm-actions button.danger:hover { background: #c5221a; }
+
+/* ---- prompt modal ---- */
+#prompt-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 210;
+}
+#prompt-backdrop[hidden] { display: none; }
+#prompt-modal {
+  width: 340px;
+  max-width: calc(100vw - 40px);
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  padding: 20px;
+}
+#prompt-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 14px; }
+#prompt-input {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  outline: none;
+}
+#prompt-input:focus { border-color: #89cff0; box-shadow: 0 0 0 2px rgba(137, 207, 240, 0.3); }
+#prompt-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+#prompt-actions button {
+  font: inherit; font-size: 14px;
+  padding: 7px 16px; border-radius: 6px;
+  border: 1px solid #cfcfcf; background: #fff; color: #333; cursor: pointer;
+}
+#prompt-actions button:hover { background: #f3f3f3; }
+#prompt-actions .primary { background: #3f9fe0; border-color: #3f9fe0; color: #fff; font-weight: 600; }
+#prompt-actions .primary:hover { background: #2e8fd2; }
+
+/* ---- new-project prompt (name + profile) ---- */
+#newproj-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 210;
+}
+#newproj-backdrop[hidden] { display: none; }
+#newproj-modal {
+  width: 340px;
+  max-width: calc(100vw - 40px);
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  padding: 20px;
+}
+#newproj-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 14px; }
+.newproj-label {
+  display: block;
+  font-size: 12px; font-weight: 600; color: #6a6a6a;
+  margin: 0 0 5px 2px;
+}
+.newproj-label:nth-of-type(2) { margin-top: 12px; }
+#newproj-name, #newproj-profile {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  outline: none;
+  background: #fff;
+}
+#newproj-name:focus, #newproj-profile:focus { border-color: #89cff0; box-shadow: 0 0 0 2px rgba(137, 207, 240, 0.3); }
+#newproj-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+#newproj-actions button {
+  font: inherit; font-size: 14px;
+  padding: 7px 16px; border-radius: 6px;
+  border: 1px solid #cfcfcf; background: #fff; color: #333; cursor: pointer;
+}
+#newproj-actions button:hover { background: #f3f3f3; }
+#newproj-actions .primary { background: #3f9fe0; border-color: #3f9fe0; color: #fff; font-weight: 600; }
+#newproj-actions .primary:hover { background: #2e8fd2; }
+
+/* ---- modal ---- */
+#modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+#modal-backdrop[hidden] { display: none; }
+#modal {
+  width: 380px;
+  max-width: calc(100vw - 40px);
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  padding: 20px;
+}
+#modal-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 16px; }
+#task-form { display: flex; flex-direction: column; gap: 12px; }
+#task-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: #888; }
+#task-form input[type="text"],
+#task-form input[type="date"],
+#task-form input[type="number"],
+#task-form select {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: #222;
+  padding: 8px 10px;
+  border: 1px solid #cfcfcf;
+  border-radius: 6px;
+  outline: none;
+  background: #fff;
+}
+#task-form input:focus, #task-form select:focus {
+  border-color: #89cff0;
+  box-shadow: 0 0 0 2px rgba(137, 207, 240, 0.3);
+}
+/* Date field: a plain text input plus a calendar button that opens our own
+   themed popup (renderer/datepicker.js) — the native picker can't be styled. */
+.date-field { position: relative; display: block; }
+#task-form .date-field input#f-start { padding-right: 34px; }
+.date-cal-btn {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: #3f9fe0;
+  opacity: 0.6;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, opacity 0.12s;
+}
+.date-cal-btn:hover { opacity: 1; background: rgba(137, 207, 240, 0.22); }
+.date-cal-btn svg { width: 15px; height: 15px; display: block; }
+
+/* ---- custom calendar popup ---- */
+.cal-popup {
+  position: fixed;
+  z-index: 320;
+  width: 244px;
+  background: #fff;
+  border: 1px solid #e4e4e4;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+  padding: 10px;
+  font-size: 13px;
+  color: #333;
+  user-select: none;
+}
+.cal-popup[hidden] { display: none; }
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.cal-month { font-weight: 600; font-size: 13px; color: #2a2a2a; }
+.cal-nav {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cal-nav:hover { background: rgba(137, 207, 240, 0.22); color: #2e8fd2; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.cal-weekdays { margin-bottom: 4px; }
+.cal-wd { text-align: center; font-size: 11px; font-weight: 600; color: #b0b0b0; padding: 2px 0; }
+.cal-blank { height: 30px; }
+.cal-day {
+  height: 30px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s;
+}
+.cal-day:hover { background: rgba(137, 207, 240, 0.25); }
+.cal-day.today { color: #3f9fe0; font-weight: 700; }
+.cal-day.selected { background: #3f9fe0; color: #fff; font-weight: 600; }
+.cal-day.selected:hover { background: #2e8fd2; }
+.cal-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f0f0f0;
+}
+.cal-foot-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #3f9fe0;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.cal-foot-btn:hover { background: rgba(137, 207, 240, 0.18); }
+.cal-foot-btn.cal-clear { color: #999; }
+.row2 { display: flex; gap: 12px; }
+.row2 > label { flex: 1; min-width: 0; }
+label.chk { flex-direction: row; align-items: center; gap: 7px; font-weight: 500; color: #555; font-size: 14px; }
+label.chk input { width: auto; }
+#modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#modal-actions .spacer { flex: 1; }
+#modal-actions button {
+  font: inherit;
+  font-size: 14px;
+  padding: 7px 16px;
+  border-radius: 6px;
+  border: 1px solid #cfcfcf;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+}
+#modal-actions button:hover { background: #f3f3f3; }
+#modal-actions .primary { background: #3f9fe0; border-color: #3f9fe0; color: #fff; font-weight: 600; }
+#modal-actions .primary:hover { background: #2e8fd2; }
+#modal-actions .danger { border-color: #e7c4bc; color: #b3261e; }
+#modal-actions .danger:hover { background: #fbeae7; }
