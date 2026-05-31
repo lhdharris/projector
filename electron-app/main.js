@@ -2,6 +2,23 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// ---- dev isolation ------------------------------------------------------
+// When running unpackaged (`npm start` / `electron .`) we give the app a
+// separate identity from an installed Projector. The installed build keys its
+// userData on the package name ("projector-app"); without this, a dev run would
+// resolve to the SAME userData dir, so it would (a) fail to get the single-
+// instance lock a running Projector already holds — silently focusing that
+// window and quitting — and (b) share config.json, clobbering the real
+// workspace list. A distinct userData dir gives dev its own config + its own
+// instance lock, so it runs side-by-side with the installed app and starts
+// with no workspaces linked (real project files stay untouched unless you link
+// their folder yourself). Packaged builds (app.isPackaged) are unaffected.
+// Must run before requestSingleInstanceLock() and any getPath('userData').
+if (!app.isPackaged) {
+  app.setName('projector-dev');
+  app.setPath('userData', path.join(app.getPath('appData'), 'projector-dev'));
+}
+
 // ---- project folder + config -------------------------------------------
 // Projects are plain .md files in a folder the user controls. The chosen
 // folder is remembered in userData/config.json; first run defaults to
