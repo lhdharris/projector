@@ -25,15 +25,29 @@
     return { tickInterval: '1month', axisFormat: "%b '%y", px: 11 };
   }
 
-  // Total width that gives the chart its regime's constant px-per-day. We size
-  // to the project's actual span so a short project (e.g. a week) stays compact
-  // and fits the canvas in one view rather than being padded out into a forced
-  // horizontal scroll. spanDays() already returns MIN_DAYS for the no-dates
-  // case, so an empty/relative-only project still gets a sane default width.
-  function chartWidth(days) {
+  // Total chart width. The natural width gives the regime its constant
+  // px-per-day; but when that's narrower than the visible canvas we stretch to
+  // fill it, so a short project (e.g. a few days) spans the whole window rather
+  // than rendering as a cramped left-hugging sliver. Projects wider than the
+  // window keep their day scale and scroll. spanDays() returns MIN_DAYS for the
+  // no-dates case, so an empty/relative-only project still gets a sane width;
+  // availWidth 0 (unmeasurable) falls back to the natural width.
+  function chartWidth(days, availWidth) {
     const px = axisFor(days).px;
-    const total = LEFT_PADDING + Math.max(1, days) * px;
+    const natural = LEFT_PADDING + Math.max(1, days) * px;
+    const total = Math.max(natural, availWidth || 0);
     return Math.min(MAX_WIDTH, Math.round(total));
+  }
+
+  // Visible canvas width: the .gantt-scroll content box. Returns 0 when it
+  // can't be measured (view hidden / not yet laid out), so chartWidth falls
+  // back to the natural span.
+  function availableWidth(targetEl) {
+    const scroller = targetEl && targetEl.closest('.gantt-scroll');
+    const w = scroller ? scroller.clientWidth : 0;
+    // clientWidth includes the 24px padding each side; drop it plus a hair so
+    // the chart fills the canvas without forcing its own horizontal scrollbar.
+    return w ? Math.max(0, w - 48 - 4) : 0;
   }
 
   // Calendar span (in days) covered by the tasks that have concrete dates.
@@ -54,7 +68,7 @@
     return Math.round((max - min) / 86400000) + 1;
   }
 
-  function configure(days) {
+  function configure(days, availWidth) {
     const axis = axisFor(days);
     global.mermaid.initialize({
       startOnLoad: false,
@@ -92,8 +106,9 @@
         titleColor: '#555555',
       },
       gantt: {
-        // A fixed width (not the container width) keeps the day scale constant.
-        useWidth: chartWidth(days),
+        // Natural day-scale width, or the canvas width when that's wider (so a
+        // short project fills the window). See chartWidth.
+        useWidth: chartWidth(days, availWidth),
         useMaxWidth: false,
         barHeight: 22,
         barGap: 6,
@@ -122,7 +137,7 @@
   // opts.colorForTask(task) -> hex  recolours each bar in the project colour,
   // shaded by status (see Palette.shade). Omitted -> Mermaid's themed palette.
   async function render(targetEl, model, handlers, opts) {
-    configure(spanDays(model));
+    configure(spanDays(model), availableWidth(targetEl));
     lastTarget = targetEl;
     lastModel = model;
     lastHandlers = handlers || lastHandlers;
@@ -140,6 +155,7 @@
       const id = `gantt-svg-${++counter}`;
       const { svg } = await global.mermaid.render(id, code);
       targetEl.innerHTML = svg;
+      liftTitleAboveMarker(targetEl);
       wireSvg(targetEl, id);
       captureBaseSize(targetEl);
       applyZoom();
@@ -150,6 +166,19 @@
         `<pre>${escapeHtml(msg)}</pre>` +
         `<div class="gantt-error-detail">Check the Mermaid syntax in the .md file.</div></div>`;
     }
+  }
+
+  // Mermaid puts the title and the top of the red "today" marker at the same y
+  // (titleTopMargin), so the marker runs straight through the centered title.
+  // Nudge the title up so it clears the marker and sits a touch higher above
+  // the chart. Clamped so it can't slide off the top edge.
+  const TITLE_LIFT = 10;
+  function liftTitleAboveMarker(targetEl) {
+    const title = targetEl.querySelector('svg .titleText');
+    if (!title) return;
+    const y = parseFloat(title.getAttribute('y'));
+    if (!Number.isFinite(y)) return;
+    title.setAttribute('y', Math.max(2, y - TITLE_LIFT));
   }
 
   // Make every task bar / label clickable -> open the task editor. Mermaid
