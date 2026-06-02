@@ -37,7 +37,7 @@
   // Total width that gives the chart its regime's constant px-per-day. We size
   // to the project's actual span so a short project (e.g. a week) stays compact
   // and fits the canvas in one view rather than being padded out into a forced
-  // horizontal scroll. spanDays() already returns MIN_DAYS for the no-dates
+  // horizontal scroll. resolveSpan() already returns MIN_DAYS for the no-dates
   // case, so an empty/relative-only project still gets a sane default width.
   function chartWidth(days) {
     const px = axisFor(days).px;
@@ -57,7 +57,7 @@
   // and chains settle: absolute date wins; "after a b" starts at the latest end
   // of its refs; a blank start follows the previous task; a date in the duration
   // slot is an explicit end. Each pass resolves whatever became answerable.
-  function spanDays(model) {
+  function resolveSpan(model) {
     const P = global.GanttParse;
     const DAY = 86400000;
     const tasks = model.tasks;
@@ -109,8 +109,13 @@
       if (startMs.has(t.id) && startMs.get(t.id) < min) min = startMs.get(t.id);
       if (endMs.has(t.id) && endMs.get(t.id) > max) max = endMs.get(t.id);
     }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return MIN_DAYS;
-    return Math.round((max - min) / DAY) + 1;
+    const ok = Number.isFinite(min) && Number.isFinite(max);
+    return {
+      startMs,                                  // taskId -> start ms, for the month header's x-calibration
+      minMs: ok ? min : null,
+      maxMs: ok ? max : null,
+      days: ok ? Math.round((max - min) / DAY) + 1 : MIN_DAYS,
+    };
   }
 
   function configure(days) {
@@ -181,28 +186,41 @@
   let lastColorForTask = null;
   let baseW = 0;
   let baseH = 0;
+  let lastSpan = null;     // { startMs, minMs, maxMs, days } from the last render
 
-  // Mermaid's gantt lexer treats a handful of words as line directives when they
-  // lead a line — `call`/`click`/`href` (task interactions), `title`, `section`,
-  // `dateFormat`, `excludes`, a leading YYYY-MM-DD date, etc. A task literally
-  // NAMED "Call vendor" or "Title slide" therefore derails the parse with a
-  // cryptic "got 'callbackname'"-style error. The chart is rendered from a
-  // freshly serialized copy, so we defuse the collision render-side only: prefix
-  // a zero-width space to any colliding name. It's invisible in the bar but stops
-  // the keyword from matching at the start of the line. The on-disk file is left
-  // exactly as the user wrote it.
+  // Defuse task names that collide with Mermaid's gantt line grammar. The chart
+  // is rendered from a freshly serialized copy, so we patch the names render-side
+  // only; the on-disk file keeps exactly what the user wrote. Two collisions:
+  //
+  // 1. Reserved leading words. The lexer treats a handful of words as line
+  //    directives when they lead a line — `call`/`click`/`href` (task
+  //    interactions), `title`, `section`, `dateFormat`, `excludes`, a leading
+  //    YYYY-MM-DD date, etc. A task literally NAMED "Call vendor" or "Title
+  //    slide" derails the parse with a cryptic "got 'callbackname'"-style error.
+  //    A zero-width space prefix is invisible in the bar but stops the keyword
+  //    from matching at the start of the line.
+  //
+  // 2. A colon in the name. ':' is Mermaid's delimiter between a task's name and
+  //    its metadata (the lexer reads the name as [^:\n]+), so a name like
+  //    "Update website: landing page" truncates the bar label at the colon and
+  //    spills the rest into the metadata slots — breaking the click target, or
+  //    the whole render. We swap each ':' for a colon look-alike (U+A789) the
+  //    lexer doesn't treat as a delimiter; it reads as a colon in the label.
   const ZWSP = '​';
+  const COLON_LOOKALIKE = '꞉'; // ꞉ MODIFIER LETTER COLON
   const GANTT_RESERVED_RE =
     /^\s*(?:gantt|dateFormat|inclusiveEndDates|topAxis|axisFormat|tickInterval|includes|excludes|todayMarker|title|acc(?:Title|Descr|Description)|weekday|weekend|section|click|call|href)\b|^\s*\d{4}-\d{2}-\d{2}\b/i;
 
   function defuseReservedNames(model) {
     let changed = false;
     const tasks = model.tasks.map((t) => {
-      if (t.name && GANTT_RESERVED_RE.test(t.name)) {
-        changed = true;
-        return Object.assign({}, t, { name: ZWSP + t.name });
-      }
-      return t;
+      if (!t.name) return t;
+      let name = t.name;
+      if (name.includes(':')) name = name.split(':').join(COLON_LOOKALIKE);
+      if (GANTT_RESERVED_RE.test(name)) name = ZWSP + name;
+      if (name === t.name) return t;
+      changed = true;
+      return Object.assign({}, t, { name });
     });
     return changed ? Object.assign({}, model, { tasks }) : model;
   }
@@ -210,7 +228,8 @@
   // opts.colorForTask(task) -> hex  recolours each bar in the project colour,
   // shaded by status (see Palette.shade). Omitted -> Mermaid's themed palette.
   async function render(targetEl, model, handlers, opts) {
-    configure(spanDays(model));
+    lastSpan = resolveSpan(model);
+    configure(lastSpan.days);
     lastTarget = targetEl;
     lastModel = model;
     lastHandlers = handlers || lastHandlers;
@@ -234,7 +253,14 @@
       const { svg } = await global.mermaid.render(id, code);
       targetEl.innerHTML = svg;
       wireSvg(targetEl, id);
+      // Flip any task label Mermaid parked in the left section gutter over to
+      // the right of its bar (and widen the canvas to fit) BEFORE captureBaseSize,
+      // so baseW reflects any widening.
+      reflowLeftLabels(targetEl, id);
       captureBaseSize(targetEl);
+      // A heavier vertical rule at each month boundary, so multi-month spans read
+      // as months rather than an undifferentiated run of day/week gridlines.
+      addMonthBoundaries(targetEl);
       // Global view only: faint rules between the per-project bands.
       if (targetEl.id === 'global-gantt-render') addGroupSeparators(targetEl, id);
       applyZoom();
@@ -320,6 +346,52 @@
     else if (tag === 'g') el.querySelectorAll('rect, path').forEach(paint);
   }
 
+  // When a task name is wider than its bar, Mermaid draws the label OUTSIDE the
+  // bar; for a bar near the chart's left edge on a short timeline it picks the
+  // LEFT side (class taskTextOutsideLeft, text-anchor:end), so the label lands in
+  // the LEFT_PADDING section-label gutter and overlaps the section titles. Flip
+  // every such label to the right of its bar instead — never obstructing the
+  // sections — and widen the SVG if a flipped label runs past the current right
+  // edge, so a very short chart can scroll to reveal it rather than clipping it.
+  function reflowLeftLabels(targetEl, renderId) {
+    const svg = targetEl.querySelector('svg');
+    if (!svg) return;
+    const lefts = svg.querySelectorAll('text.taskTextOutsideLeft');
+    if (!lefts.length) return;
+
+    const prefix = renderId + '-';
+    const PAD = 6; // gap between the bar's right edge and the label
+    let maxRight = 0;
+    lefts.forEach((text) => {
+      // id is `${renderId}-${taskId}-text`; the bar carries `${renderId}-${taskId}`.
+      const id = text.id || '';
+      if (!id.startsWith(prefix) || !id.endsWith('-text')) return;
+      const taskId = id.slice(prefix.length, -'-text'.length);
+      const bar = svg.querySelector(`[id="${CSS.escape(prefix + taskId)}"]`);
+      if (!bar) return;
+      let box;
+      try { box = bar.getBBox(); } catch (_) { return; } // rect or milestone path
+      const x = box.x + box.width + PAD;
+      text.setAttribute('x', String(x));
+      // Swap only the placement token so the label inherits text-anchor:start and
+      // the outside-fill colour; gantt-clickable (added by wireSvg) is preserved.
+      const cls = text.getAttribute('class') || '';
+      text.setAttribute('class', cls.replace('taskTextOutsideLeft', 'taskTextOutsideRight'));
+      let w = 0;
+      try { w = text.getBBox().width; } catch (_) {} // width is independent of x/anchor
+      maxRight = Math.max(maxRight, x + w);
+    });
+
+    // Grow the viewBox (and width attr) so a flipped label past the old right
+    // edge becomes scrollable instead of being clipped by the SVG root.
+    const vb = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+    if (vb.length === 4 && Number.isFinite(vb[2]) && maxRight + 12 > vb[2]) {
+      vb[2] = Math.round(maxRight + 12);
+      svg.setAttribute('viewBox', vb.join(' '));
+      svg.setAttribute('width', String(vb[2]));
+    }
+  }
+
   // Global (grouped) view: each project is one Mermaid section (global.js sets
   // every task's `assignee` to its project title), so draw a faint horizontal
   // rule between consecutive project bands. We derive each band's vertical extent
@@ -390,6 +462,7 @@
     svg.style.width = `${Math.round(baseW * zoom)}px`;
     svg.style.height = `${Math.round(baseH * zoom)}px`;
     updateFloatingAxis(lastTarget);
+    updateMonthHeader(lastTarget);
     updateZoomLabel();
   }
 
@@ -438,6 +511,212 @@
     // leaving just the date labels.
     strip.appendChild(grid.cloneNode(true));
     targetEl.appendChild(strip);
+  }
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // First-of-month timestamps from the start month's 1st through maxMs. The
+  // first entry can precede minMs (a mid-month start) — its label is clamped to
+  // the chart's left edge in updateMonthHeader.
+  function monthStarts(minMs, maxMs) {
+    const out = [];
+    let cur = new Date(new Date(minMs).getFullYear(), new Date(minMs).getMonth(), 1);
+    while (cur.getTime() <= maxMs) {
+      out.push(cur.getTime());
+      cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    }
+    return out;
+  }
+
+  // A linear date(ms) -> x (SVG units) map, calibrated from the rendered chart
+  // rather than assumed, so it survives Mermaid's internal padding and version
+  // drift. We pair task-bar rects (left edge x = scale(start)) with the start
+  // dates resolved by resolveSpan, then fit a line through the two anchors with
+  // the widest date separation. Falls back to the regime's constant px-per-day
+  // from minMs when fewer than two dated bars exist (e.g. an all-milestone or
+  // single-task project).
+  function buildDateToX(targetEl) {
+    const svg = targetEl.querySelector('svg');
+    if (!svg || !lastSpan || !lastModel) return null;
+    const startMs = lastSpan.startMs;
+    const pts = [];
+    for (const t of lastModel.tasks) {
+      if (!startMs.has(t.id)) continue;
+      // The renderId-taskId id may sit on the bar rect or a wrapping group.
+      let rect = null;
+      for (const el of svg.querySelectorAll(`[id$="-${t.id}"]`)) {
+        if (el.tagName.toLowerCase() === 'rect') { rect = el; break; }
+        const r = el.querySelector && el.querySelector('rect');
+        if (r) { rect = r; break; }
+      }
+      if (!rect) continue;
+      const x = parseFloat(rect.getAttribute('x'));
+      if (Number.isFinite(x)) pts.push({ ms: startMs.get(t.id), x });
+    }
+    if (pts.length >= 2) {
+      let lo = pts[0], hi = pts[0];
+      for (const p of pts) { if (p.ms < lo.ms) lo = p; if (p.ms > hi.ms) hi = p; }
+      if (hi.ms !== lo.ms) {
+        const m = (hi.x - lo.x) / (hi.ms - lo.ms);
+        const b = lo.x - m * lo.ms;
+        return (ms) => m * ms + b;
+      }
+    }
+    const px = axisFor(lastSpan.days).px;
+    const DAY = 86400000;
+    const base = lastSpan.minMs;
+    return (ms) => LEFT_PADDING + ((ms - base) / DAY) * px;
+  }
+
+  // A 2px vertical rule inside the chart at the first of each month, drawn behind
+  // the task bars so multi-month timelines segment visibly into months (the
+  // day/week gridlines alone give no monthly cue). Lives in SVG units like the
+  // bars, so it scales with zoom for free (unlike the HTML month-label header).
+  // Calibrated with the same date->x map as the header so each line sits under
+  // its month label. Only the boundaries strictly inside the span get a line —
+  // the first month begins at/before the chart's left edge, which is no boundary.
+  function addMonthBoundaries(targetEl) {
+    const svg = targetEl.querySelector('svg');
+    if (!svg || !lastSpan || !baseH) return;
+    const { minMs, maxMs } = lastSpan;
+    if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) return;
+    const months = monthStarts(minMs, maxMs).filter((ms) => ms > minMs);
+    if (!months.length) return;
+    const toX = buildDateToX(targetEl);
+    if (!toX) return;
+
+    // Span the lines over the same vertical extent as Mermaid's gridlines. The
+    // bottom-axis gridlines live in a `.grid` group translated down to the axis
+    // line (y = chartHeight - 50); d3 draws each tick line from an IMPLICIT y1=0
+    // up to a negative y2 (the tickSize). So we read a tick's RENDERED box
+    // (getBBox captures the implicit y1) and add the group's translateY to land
+    // in absolute SVG coords. Reading the raw y1/y2 attributes doesn't work — d3
+    // omits y1, leaving only the single y2 value, which collapses yTop===yBot
+    // into a zero-length (invisible) line. Fall back to the whole region above
+    // the bottom axis when the grid can't be measured (e.g. rendered hidden).
+    const grid = svg.querySelector('.grid');
+    let yTop = Infinity;
+    let yBot = -Infinity;
+    if (grid) {
+      const tl = grid.transform.baseVal;
+      const ty = tl && tl.numberOfItems ? tl.getItem(0).matrix.f : 0;
+      grid.querySelectorAll('.tick line').forEach((ln) => {
+        let bb;
+        try { bb = ln.getBBox(); } catch (_) { return; }
+        yTop = Math.min(yTop, ty + bb.y);
+        yBot = Math.max(yBot, ty + bb.y + bb.height);
+      });
+    }
+    if (!Number.isFinite(yTop) || !Number.isFinite(yBot) || yBot - yTop < 4) {
+      yTop = 0;
+      yBot = baseH - AXIS_LINE_FROM_BOTTOM;
+    }
+
+    const group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('class', 'gantt-month-bounds');
+    for (const ms of months) {
+      const x = toX(ms);
+      if (!Number.isFinite(x)) continue;
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('class', 'gantt-month-bound');
+      line.setAttribute('x1', String(x));
+      line.setAttribute('x2', String(x));
+      line.setAttribute('y1', String(yTop));
+      line.setAttribute('y2', String(yBot));
+      group.appendChild(line);
+    }
+    if (!group.childNodes.length) return;
+    // After `.grid` so the rules sit over the gridlines/section bands but before
+    // the task bars that follow in document order, which paint on top.
+    if (grid && grid.nextSibling) grid.parentNode.insertBefore(group, grid.nextSibling);
+    else if (grid) grid.parentNode.appendChild(group);
+    else svg.appendChild(group);
+  }
+
+  // Floating month header. Mermaid's date axis (daily/weekly ticks) doesn't mark
+  // which month a date falls in, so a multi-month project has no monthly anchor.
+  // We add a sticky strip of month labels: as the first child of the
+  // horizontally-scrolling render box it tracks horizontal scroll for free, and
+  // position:sticky;top:0 (style.css) pins it to the top of the view while the
+  // chart scrolls down. Only shown when the span crosses a month boundary.
+  // Rebuilt on every render/zoom (cheap) to stay scale-locked.
+  function updateMonthHeader(targetEl) {
+    if (!targetEl) return;
+    const old = targetEl.querySelector(':scope > .gantt-month-header');
+    if (old) old.remove();
+    const svg = targetEl.querySelector('svg');
+    if (!svg || !baseW || !lastSpan) return;
+    const { minMs, maxMs } = lastSpan;
+    if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) return;
+
+    const months = monthStarts(minMs, maxMs);
+    if (months.length < 2) return;      // single month: nothing to mark
+
+    const toX = buildDateToX(targetEl);
+    if (!toX) return;
+
+    const header = document.createElement('div');
+    header.className = 'gantt-month-header';
+    header.style.width = `${Math.round(baseW * zoom)}px`;
+
+    let prevYear = null;
+    for (const ms of months) {
+      const d = new Date(ms);
+      // Clamp a month beginning before the chart to its left edge.
+      const x = Math.max(0, toX(Math.max(ms, minMs)) * zoom);
+      const label = document.createElement('div');
+      label.className = 'gantt-month-label';
+      label.style.left = `${Math.round(x)}px`;
+      label.dataset.natural = String(Math.round(x)); // boundary x, for the scroll pin
+      const y = d.getFullYear();
+      label.textContent = y !== prevYear ? `${MONTHS[d.getMonth()]} ${y}` : MONTHS[d.getMonth()];
+      prevYear = y;
+      header.appendChild(label);
+    }
+    // Prepend so it sits at the chart's top and scrolls horizontally with it.
+    targetEl.insertBefore(header, targetEl.firstChild);
+
+    // Cache each label's rendered width (one layout read, post-insert) for the
+    // pin math, then pin for the current scroll position and keep it pinned.
+    for (const lbl of header.children) lbl.dataset.w = String(lbl.offsetWidth);
+    const scroll = targetEl.closest('.gantt-scroll');
+    if (!scroll) return;
+    pinMonthHeader(scroll);
+    if (!scroll.__monthPinBound) {
+      scroll.__monthPinBound = true;
+      scroll.addEventListener('scroll', () => pinMonthHeader(scroll), { passive: true });
+    }
+  }
+
+  // Keep the month label for the region at the viewport's left edge pinned there
+  // as the chart scrolls sideways, so a multi-month chart always names the month
+  // you're looking at instead of going blank between boundaries that can sit far
+  // apart. The active label rides the left edge until the next month's label
+  // reaches it and pushes it off (a sticky-section-header feel). Cheap: reads
+  // scrollLeft and writes left on a handful of labels — widths are pre-cached, so
+  // no layout thrash. Re-queries the header each call since render/zoom rebuilds it.
+  function pinMonthHeader(scroll) {
+    const header = scroll.querySelector('.gantt-month-header');
+    if (!header) return;
+    const labels = header.children;
+    const sl = scroll.scrollLeft;
+    let active = -1;
+    for (let i = 0; i < labels.length; i++) {
+      const nat = parseFloat(labels[i].dataset.natural) || 0;
+      labels[i].style.left = `${nat}px`;            // reset to its boundary
+      if (nat <= sl) active = i;                    // last month at/left of the edge
+    }
+    if (active < 0) return;                          // scrolled before the first month
+    const el = labels[active];
+    const nat = parseFloat(el.dataset.natural) || 0;
+    const w = parseFloat(el.dataset.w) || 0;
+    let x = sl;
+    if (active + 1 < labels.length) {
+      const next = parseFloat(labels[active + 1].dataset.natural) || 0;
+      x = Math.min(x, next - w - 4);                 // next month pushes it off-edge
+    }
+    el.style.left = `${Math.round(Math.max(x, nat))}px`;
   }
 
   function updateZoomLabel() {

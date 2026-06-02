@@ -677,7 +677,15 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 .card.dragging { opacity: 0.5; }
 .card.crit { border-left: 3px solid #e8694a; }
 .card.milestone { border-left: 3px solid #b08cd9; }
-.card-name { font-size: 14px; font-weight: 500; color: #2a2a2a; line-height: 1.35; }
+.card-name {
+  font-size: 14px; font-weight: 500; color: #2a2a2a; line-height: 1.35;
+  /* Wrap long names inside the fixed-width card instead of spilling past its
+     edge. hyphens:auto hyphenates ordinary long words (<html lang="en"> is set);
+     overflow-wrap hard-breaks unbreakable tokens (e.g. slash-joined runs like
+     "book/register/parish", which have no break opportunity or dictionary hyphen). */
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
 .card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .badge {
   font-size: 11px;
@@ -765,7 +773,12 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
    content (gridlines, today line) shows through. Zeroing it seats the date row
    flush against the very bottom of the window. */
 .gantt-scroll {
-  flex: 1 1 auto; overflow: auto; padding: 24px 24px 0; background: #ffffff;
+  /* No top padding: a scroll container's padding-top offsets where a sticky
+     child settles, so the month header (position:sticky; top:0) would stick
+     24px down and the chart would scroll through the gap above it. The top gap
+     lives on the render box below instead, so the header pins flush to the very
+     top. Bottom stays 0 for the floating date axis (see note below). */
+  flex: 1 1 auto; overflow: auto; padding: 0 24px; background: #ffffff;
   /* Column flex so a short chart can be vertically centred (see the auto margins
      below). Left as a top-anchored block, mermaid sizes the SVG to just its rows
      and leaves a tall band of whitespace between the bottom date axis and the
@@ -788,7 +801,10 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 .gantt-scroll:has(.gantt-error) { display: flex; align-items: center; justify-content: center; }
 .gantt-scroll:has(.gantt-empty) #global-gantt-render,
 .gantt-scroll:has(.gantt-empty) #gantt-render { margin: auto; }
-#gantt-render, #global-gantt-render { min-width: 0; display: inline-block; }
+/* Top gap relocated here from .gantt-scroll's padding (see note there) so the
+   sticky month header can pin to the true top. It scrolls away with the chart,
+   leaving the header flush against the toolbar once scrolled. */
+#gantt-render, #global-gantt-render { min-width: 0; display: inline-block; padding-top: 24px; }
 #gantt-render svg, #global-gantt-render svg { max-width: none; display: block; }
 /* Floating date axis: a sticky mirror of the chart's bottom axis. It lives
    inside the inline-block render box so it scrolls horizontally with the chart,
@@ -811,6 +827,31 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
    axis domain line run off the top of the band and would just be clutter. */
 .gantt-axis-float .tick line,
 .gantt-axis-float .domain { display: none; }
+/* Floating month header: a sticky strip of month labels at the top of the
+   chart. Like the bottom axis it lives inside the inline-block render box so it
+   scrolls horizontally with the chart, while position:sticky;top:0 pins it to
+   the top of the view as the chart scrolls down. Only present (added in JS) for
+   projects whose span crosses a month boundary. */
+.gantt-month-header {
+  position: sticky;
+  top: 0;
+  left: 0;
+  height: 22px;
+  background: #ffffff;
+  box-shadow: 0 1px 0 #ececec;
+  pointer-events: none;
+  z-index: 2;
+}
+.gantt-month-label {
+  position: absolute;
+  top: 0;
+  line-height: 22px;
+  padding-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #777777;
+  white-space: nowrap;
+}
 /* Mermaid renders the date gridlines with a mix of inherited/sub-pixel stroke
    widths, so some lines look heavier than others. Pin them to a uniform 1px,
    crisply aligned, so the timeline grid reads as evenly spaced. */
@@ -818,6 +859,14 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 #global-gantt-render .grid .tick line {
   stroke: #e2e2e2;
   stroke-width: 1px;
+  shape-rendering: crispEdges;
+}
+/* Heavy vertical rule at the first of each month (see addMonthBoundaries).
+   Distinctly thicker and darker than the 1px #e2e2e2 day/week gridlines so the
+   start of each month reads at a glance without checking the date axis. */
+#gantt-render .gantt-month-bound, #global-gantt-render .gantt-month-bound {
+  stroke: #b0b0b0;
+  stroke-width: 2px;
   shape-rendering: crispEdges;
 }
 /* Faint rules between the per-project bands in the global (grouped) timeline. */
@@ -834,11 +883,16 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
   stroke-width: 1px;
   shape-rendering: crispEdges;
 }
-/* Task-bar outlines at 1px too (no crispEdges, so their rounded corners stay
-   smooth). recolour() sets only the stroke colour, leaving this width intact. */
-#gantt-render rect.task, #global-gantt-render rect.task,
+/* Task-bar outlines (no crispEdges, so their rounded corners stay smooth).
+   recolour() sets only the stroke colour, leaving this width intact. Milestone
+   diamonds (.task path) carry a heavier outline than the rectangular bars: they
+   are small and their edge is almost all you see, so a thin faint stroke can
+   disappear on light project colours (worst for To Do). */
+#gantt-render rect.task, #global-gantt-render rect.task {
+  stroke-width: 1.5px;
+}
 #gantt-render .task path, #global-gantt-render .task path {
-  stroke-width: 1px;
+  stroke-width: 2.25px;
 }
 /* Clickable task bars + labels */
 .gantt-clickable { cursor: pointer; }

@@ -3,6 +3,15 @@ const path = require('path');
 const fs = require('fs');
 const shareServer = require('./share-server');
 
+// ---- native Wayland -----------------------------------------------------
+// Run as a native Wayland client when the session is Wayland (no-op on X11 /
+// Windows / macOS, which keep X11/native). A frameless window under XWayland
+// doesn't hand its title-bar drag (-webkit-app-region: drag) to the compositor
+// as an interactive move, so GNOME/KDE never offer edge-tiling; as a native
+// Wayland client the move is compositor-managed, restoring drag-to-edge half-
+// tiling, drag-to-top maximize, and Super+Left/Right. Must run before app ready.
+app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+
 // ---- dev isolation ------------------------------------------------------
 // When running unpackaged (`npm start` / `electron .`) we give the app a
 // separate identity from an installed Projector. The installed build keys its
@@ -211,11 +220,16 @@ const APP_ICON = path.join(__dirname, 'assets', 'icon.png');
 
 function createWindow() {
   const win = new BrowserWindow({
-    // Wide enough that the three Task List columns + sidebar fit without a
-    // horizontal scrollbar at the app's 1.2× UI zoom.
+    // Default wide enough that the three Task List columns + sidebar fit
+    // without a horizontal scrollbar at the app's 1.2× UI zoom.
     width: 1340,
     height: 860,
-    minWidth: 980,
+    // minWidth must stay below a half-screen tile, or the compositor can't
+    // shrink the window into the tile and silently refuses to half-tile it
+    // (GNOME/KDE honour a client's minimum size). Half of a 1920px display is
+    // 960px, so the old 980 blocked left/right tiling there; 640 tiles on any
+    // screen >=1280 wide and the layout just reflows/scrolls when narrower.
+    minWidth: 640,
     minHeight: 520,
     frame: false,
     backgroundColor: '#ffffff',

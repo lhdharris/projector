@@ -100,7 +100,9 @@
       return { fill: adjust(base, +12, -22), stroke: adjust(base, -3, -6), text: TEXT };
     }
     if (status === 'todo') {
-      return { fill: adjust(base, +18, -30), stroke: adjust(base, +2, -14), text: TEXT };
+      // To Do has the palest fill, so the edge needs real contrast or it
+      // vanishes on light pastels — darken (and slightly saturate) the stroke.
+      return { fill: adjust(base, +18, -30), stroke: adjust(base, -16, +6), text: TEXT };
     }
     // active / in progress — gentle edge, not a hard outline
     return { fill: base, stroke: adjust(base, -8, -4), text: TEXT };

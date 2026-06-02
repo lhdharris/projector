@@ -109,7 +109,12 @@
       if (secM) { assignee = normalizeAssignee(secM[1]); continue; }
 
       // Everything else is a task: "Task name : meta, meta, ..."
-      const colon = line.indexOf(':');
+      // Split on the LAST colon, not the first: a task name may itself contain
+      // a colon (e.g. "Update website: landing page"), whereas the metadata
+      // tokens after the delimiter (tags, id, YYYY-MM-DD dates, durations,
+      // "after"/"until" refs) never do. Splitting on the first colon would
+      // truncate such a name to the text before its own colon.
+      const colon = line.lastIndexOf(':');
       if (colon === -1) continue;
       const name = line.slice(0, colon).trim();
       const metaStr = line.slice(colon + 1).trim();

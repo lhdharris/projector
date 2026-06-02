@@ -727,13 +727,15 @@
     settingsBody.style.maxHeight = (window.innerHeight - 40) / zoom + 'px';
   }
 
-  // Human label for the roster bucket being edited ('' = the shared roster).
-  function teamScopeLabel() { return state.teamEditProfile || 'Shared'; }
+  // Human label for the team (profile) whose roster is being edited. Only used
+  // while a profile is selected, so it's always the profile's own name now.
+  function teamScopeLabel() { return state.teamEditProfile; }
 
   function openSettings() {
-    // Default the team editor to the active profile (else the shared roster).
+    // Team rosters are per-profile, so default the editor to the active profile,
+    // else the first profile (there's nothing to manage until a profile exists).
     state.teamEditProfile = (state.activeProfile && state.profiles.includes(state.activeProfile))
-      ? state.activeProfile : '';
+      ? state.activeProfile : (state.profiles[0] || '');
     renderProfiles();
     populateTeamEditProfile();
     renderTeamMembers();
@@ -766,10 +768,15 @@
     location.reload();
   }
 
-  // Fill the "editing which team" selector with the shared bucket + every profile.
+  // Fill the "editing which team" selector with every profile. Rosters are
+  // per-profile only — there's no shared/all-profiles bucket to manage — so if
+  // the current pick is gone (deleted) or unset, fall back to the first profile.
   function populateTeamEditProfile() {
     const sel = byId('team-edit-profile');
     sel.innerHTML = '';
+    if (!state.profiles.includes(state.teamEditProfile)) {
+      state.teamEditProfile = state.profiles[0] || '';
+    }
     const opt = (value, label) => {
       const o = document.createElement('option');
       o.value = value;
@@ -777,12 +784,22 @@
       if (value === state.teamEditProfile) o.selected = true;
       sel.appendChild(o);
     };
-    opt('', 'Shared (all profiles)');
     for (const name of state.profiles) opt(name, name);
   }
 
   async function renderTeamMembers() {
     const wrap = byId('team-members');
+    // Rosters are per-profile; with no profile to target there's nothing to
+    // manage, so steer the user to create one first and disable "Add member".
+    if (!state.teamEditProfile) {
+      byId('team-add').disabled = true;
+      const e = document.createElement('div');
+      e.className = 'tm-empty';
+      e.textContent = 'Add a profile first, then pick it here to manage its team.';
+      wrap.replaceChildren(e);
+      return;
+    }
+    byId('team-add').disabled = false;
     // Compute first, then swap in one go: clearing the list up front would leave
     // it empty across the (IPC-backed) awaits, and the browser would paint that
     // collapsed frame — making the natural-height dialog blink as it shrinks and
@@ -1071,6 +1088,14 @@
     if (!state.editingId && (!state.editSave || !state.editModel)) return;
 
     const assignee = byId('f-assignee').value.trim(); // '' = unassigned
+    // A name not already on the active profile's roster would silently become a
+    // new team member — guard against a typo spawning a phantom person.
+    if (assignee && !state.team.includes(assignee)) {
+      const ok = await confirmDialog(
+        `“${assignee}” isn’t on the team yet. Add them as a new team member for this task?`,
+        { okLabel: 'Add member', cancelLabel: 'Cancel' });
+      if (!ok) return;          // leave the modal open so the name can be fixed
+    }
     rememberAssignee(assignee);
     const milestone = byId('f-milestone').checked;
     const durDays = Math.max(0, parseInt(byId('f-duration').value, 10) || 0);
@@ -1557,9 +1582,17 @@
     await loadTeam();            // roster is per-profile, so it changes here
     renderProjectList();
     // The global view is scoped to the active profile, so rebuild it from the
-    // newly-filtered project set; a single project view just re-renders.
-    if (state.mode === 'global') await enterGlobal();
-    else rerender();            // Team view columns follow the new roster
+    // newly-filtered project set.
+    if (state.mode === 'global') { await enterGlobal(); return; }
+    // The open project may not belong to the new profile (it's no longer in the
+    // filtered sidebar). renderCurrentView only bails when state.model is null,
+    // so without this it would keep rendering the now-hidden project. Drop the
+    // selection to the empty state, mirroring loadProjects' reload guard.
+    if (state.currentFile) {
+      const meta = state.projects.find((p) => p.file === state.currentFile);
+      if (!meta || !inActiveProfile(meta)) { clearSelection(); return; }
+    }
+    rerender();                 // Team view columns follow the new roster
   }
 
   // Bottom-bar dropdown: pick a profile, or open Settings. Anchored to the
@@ -1620,8 +1653,13 @@
       state.profiles.push(n);
       state.profiles.sort((a, b) => a.localeCompare(b));
       saveProfiles();
+      // With the shared bucket gone, point the team editor at the first profile
+      // the user creates so its team can be managed straight away.
+      if (!state.teamEditProfile) state.teamEditProfile = n;
     }
     renderProfiles();
+    populateTeamEditProfile();
+    renderTeamMembers();
   }
 
   async function renameProfile(oldName) {
@@ -1640,6 +1678,8 @@
     localStorage.setItem('activeProfile', state.activeProfile);
     await refreshAfterProfileChange();
     renderProfiles();
+    populateTeamEditProfile(); // the edited team may have been renamed/removed
+    renderTeamMembers();
   }
 
   async function removeProfile(name, count) {
@@ -1656,6 +1696,8 @@
     localStorage.setItem('activeProfile', state.activeProfile);
     await refreshAfterProfileChange();
     renderProfiles();
+    populateTeamEditProfile(); // the edited team may have been renamed/removed
+    renderTeamMembers();
   }
 
   // Rewrite the profile tag on every project currently tagged `oldName`.
