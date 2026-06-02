@@ -18,7 +18,7 @@ release notes at the bottom say exactly that.
 |---|---|
 | Project root | the synced `…/projector-app` folder (contains `electron-app/`, `res/`) |
 | App project dir | `projector-app/electron-app` (run all `npm`/`electron-builder` here) |
-| Version | read it, don't hardcode: `node -p "require('./package.json').version"` (currently `1.1.2`) |
+| Version | read it, don't hardcode: `node -p "require('./package.json').version"` (currently `1.2.0`) |
 | GitHub account | **`lhdharris`** (verify with `gh auth status`) |
 | Target repo | **`lhdharris/projector`** — does **not exist yet**, you will create it |
 | Output dir | `electron-app/dist/` |

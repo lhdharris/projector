@@ -9,6 +9,9 @@ electron-app/dist/
 Thumbs.db
 *.log
 
+# Local Claude Code settings (machine-specific permissions, not shared)
+.claude/settings.local.json
+
 # Unrelated project that lives under res/ but has its own git repo
 # (lhdharris/folia-browser) — not part of Projector.
 res/tabless-browser/

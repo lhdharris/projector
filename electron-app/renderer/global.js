@@ -19,24 +19,6 @@
     return `after ${ids.join(' ')}`;
   }
 
-  // Earliest start → latest end across a project's concrete-dated tasks, as
-  // ISO strings, or null if nothing has a real date.
-  function projectSpan(model) {
-    const P = global.GanttParse;
-    let min = Infinity, max = -Infinity;
-    for (const t of model.tasks) {
-      if (!t.start || !P.DATE_RE.test(t.start)) continue;
-      const s = Date.parse(t.start + 'T00:00:00');
-      if (Number.isNaN(s)) continue;
-      const dur = t.milestone ? 0 : Math.max(0, P.parseDurationDays(t.duration));
-      const e = s + dur * 86400000;
-      if (s < min) min = s;
-      if (e > max) max = e;
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
-    return { start: P.toISO(new Date(min)), end: P.toISO(new Date(max)) };
-  }
-
   // projects: [{ file, title, color, model }]
   function build(projects) {
     const kTasks = [];
@@ -46,30 +28,20 @@
 
     projects.forEach((proj, idx) => {
       const color = global.Palette.colorFor(proj);
-      const remap = new Map();
-      proj.model.tasks.forEach((t) => remap.set(t.id, `p${idx}__${t.id}`));
+      const remap = new Map();      // origId -> namespaced Gantt id
+      const gidByOrig = new Map();  // origId -> synthetic Kanban id
+      proj.model.tasks.forEach((t, j) => {
+        remap.set(t.id, `p${idx}__${t.id}`);
+        gidByOrig.set(t.id, `g${idx}_${j}`);
+      });
 
-      // Summary bar first in each project's band: one bar spanning the whole
-      // project, its tasks listed underneath. Clicking it opens the project.
-      const span = projectSpan(proj.model);
-      if (span) {
-        const sid = `p${idx}__summary`;
-        gTasks.push({
-          name: proj.title || 'Project',
-          id: sid,
-          assignee: proj.title || 'Project',
-          status: 'active',
-          crit: false,
-          milestone: false,
-          start: span.start,
-          duration: span.end,
-        });
-        gInfo.set(sid, { file: proj.file, origId: null, color, title: proj.title, summary: true });
-      }
-
+      // Each project becomes a labelled band (section = project title); the
+      // title shown on the left is enough, so we don't add a separate summary
+      // bar spanning the band.
       proj.model.tasks.forEach((t, j) => {
         const gid = `g${idx}_${j}`;
-        kTasks.push(Object.assign({}, t, { id: gid }));
+        // Remap "after" refs to the Kanban ids so cards can name predecessors.
+        kTasks.push(Object.assign({}, t, { id: gid, start: remapStart(t.start, gidByOrig) }));
         kInfo.set(gid, { file: proj.file, origId: t.id, color, title: proj.title });
 
         // The global Gantt bands by project, so override the per-bar grouping

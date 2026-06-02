@@ -35,13 +35,33 @@
     return startMs + dur * 86400000;
   }
 
-  function deadlineLabel(task) {
+  // Card's secondary line. An "after <ids>" start resolves to the predecessor
+  // task names — never the raw Mermaid id — mirroring the Kanban wording; a
+  // dated task shows its "due <end>"; anything else shows nothing. nameById maps
+  // a task id to its name (unknown ids fall back to the id so we never lose
+  // information).
+  function depOrDue(task, nameById) {
     const P = global.GanttParse;
-    if (!task.start || !P.DATE_RE.test(task.start)) return task.start || '';
-    if (task.milestone) return task.start;
+    const start = (task.start || '').trim();
+    const after = /^after\s+(.+)$/i.exec(start);
+    if (after) {
+      const names = after[1].split(/\s+/).filter(Boolean)
+        .map((id) => (nameById && nameById.get(id)) || id);
+      return afterLabel(names);
+    }
+    if (!start || !P.DATE_RE.test(start)) return '';
+    if (task.milestone) return `due ${start}`;
     const days = P.parseDurationDays(task.duration);
-    if (days <= 0) return task.start;
-    return P.addDays(task.start, days);
+    const end = days > 0 ? P.addDays(start, days) : start;
+    return `due ${end}`;
+  }
+
+  // "Starts after ‘X’ is finished", joining multiple predecessors naturally.
+  function afterLabel(names) {
+    const quoted = names.map((n) => `‘${n}’`);
+    if (quoted.length === 1) return `Starts after ${quoted[0]} is finished`;
+    const last = quoted.pop();
+    return `Starts after ${quoted.join(', ')} and ${last} are finished`;
   }
 
   // Status band first (in-progress → to-do → done), then critical, then soonest
@@ -93,8 +113,18 @@
   //             onAddTaskFor(assignee), onDeleteMember(name) }
   function render(container, tasks, handlers, opts) {
     opts = opts || {};
+    // A status change re-renders the whole board. The .team-board is the
+    // horizontal scroller, and we rebuild it from scratch below, so without
+    // this its scrollLeft resets and the view snaps back to the leftmost
+    // column. Capture the old position and restore it onto the new board.
+    const prevBoard = container.querySelector('.team-board');
+    const prevScrollLeft = prevBoard ? prevBoard.scrollLeft : 0;
+
     container.innerHTML = '';
     closePopup();
+
+    // id -> name, so a card showing an "after <id>" dependency can name it.
+    const nameById = new Map(tasks.map((t) => [t.id, t.name || '']));
 
     const board = document.createElement('div');
     board.className = 'team-board';
@@ -125,13 +155,16 @@
       for (const key of order) {
         const assignee = key === UNASSIGNED ? '' : key;
         const list = buckets.get(key).slice().sort(compareTasks);
-        board.appendChild(column(key, assignee, list, handlers, opts));
+        board.appendChild(column(key, assignee, list, handlers, opts, nameById));
       }
     }
     container.appendChild(board);
+    // Now that the new board is in the DOM (and its scrollWidth is known), put
+    // the user back where they were; the browser clamps if it's now narrower.
+    board.scrollLeft = prevScrollLeft;
   }
 
-  function column(label, assignee, tasks, handlers, opts) {
+  function column(label, assignee, tasks, handlers, opts, nameById) {
     const colEl = document.createElement('div');
     colEl.className = 'kanban-col team-col' + (assignee ? '' : ' unassigned');
     colEl.dataset.assignee = assignee;
@@ -158,7 +191,7 @@
 
     const listEl = document.createElement('div');
     listEl.className = 'kanban-list';
-    for (const task of tasks) listEl.appendChild(card(task, handlers, opts));
+    for (const task of tasks) listEl.appendChild(card(task, handlers, opts, nameById));
     colEl.appendChild(listEl);
 
     // Drop a card here to reassign it to this column's person.
@@ -174,7 +207,7 @@
     return colEl;
   }
 
-  function card(task, handlers, opts) {
+  function card(task, handlers, opts, nameById) {
     const el = document.createElement('div');
     const status = task.status || 'todo';
     el.className = 'card ' + status + (task.crit ? ' crit' : '') + (task.milestone ? ' milestone' : '');
@@ -206,12 +239,12 @@
     if (task.milestone) badges.push('<span class="badge ms">◆ milestone</span>');
     if (task.crit) badges.push('<span class="badge crit">critical</span>');
 
-    const due = deadlineLabel(task);
+    const dateLine = depOrDue(task, nameById);
     el.innerHTML = `
       <div class="card-name">${escapeHtml(task.name || 'Untitled')}</div>
       <div class="card-status-row"></div>
       <div class="card-badges">${badges.join('')}</div>
-      ${due ? `<div class="card-dates">due ${escapeHtml(due)}</div>` : ''}
+      ${dateLine ? `<div class="card-dates">${escapeHtml(dateLine)}</div>` : ''}
     `;
 
     // Status tag under the title (mirrors the Task List pill). Clicking it opens

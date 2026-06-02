@@ -13,6 +13,14 @@ contextBridge.exposeInMainWorld('appInfo', {
   getVersion: () => ipcRenderer.invoke('app:getVersion'),
 });
 
+// "Share meeting": a read-only LAN web view of the chosen project(s).
+contextBridge.exposeInMainWorld('share', {
+  start:  (payload) => ipcRenderer.invoke('share:start', payload),
+  stop:   () => ipcRenderer.invoke('share:stop'),
+  status: () => ipcRenderer.invoke('share:status'),
+  wifi:   () => ipcRenderer.invoke('share:wifi'),
+});
+
 // Project file storage. Everything lives as .md files in a user-chosen
 // folder; the renderer never touches the filesystem directly.
 contextBridge.exposeInMainWorld('projects', {

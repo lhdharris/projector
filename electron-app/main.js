@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const shareServer = require('./share-server');
 
 // ---- dev isolation ------------------------------------------------------
 // When running unpackaged (`npm start` / `electron .`) we give the app a
@@ -73,6 +74,27 @@ function setWorkspaces(list) {
   const cfg = readConfig();
   cfg.workspaces = list;
   writeConfig(cfg);
+}
+
+// Dev builds run isolated (separate `projector-dev` userData, see top of file) and
+// so start with no workspaces — and a previously-linked throwaway folder under
+// /tmp can be wiped between runs, leaving a dead reference. When dev has no
+// workspace that still exists on disk, seed a persistent demo workspace (under
+// userData, so /tmp cleanup can't touch it) and link it, so the dev UI always has
+// test content to load. No-op when packaged; left untouched if the user has any
+// real workspace linked. dev-seed.js is dev-only and never bundled (not in
+// package.json build.files; required lazily behind this guard).
+function ensureDevContent() {
+  if (app.isPackaged) return;
+  const list = workspaces(); // also runs the legacy-config migration
+  const anyExists = list.some((p) => {
+    try { return fs.statSync(p).isDirectory(); } catch { return false; }
+  });
+  if (anyExists) return;
+  const demo = path.join(app.getPath('userData'), 'demo-workspace');
+  ensureDir(demo);
+  require('./dev-seed')(demo);
+  setWorkspaces([demo]);
 }
 
 // Turn a project title into a safe .md filename.
@@ -206,6 +228,40 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  installContextMenu(win);
+}
+
+// A right-click clipboard menu. Electron ships no default context menu, and the
+// frameless window has no menu bar, so without this there's no mouse-driven
+// copy/paste anywhere in the UI. We build the menu from the click context:
+// cut/paste only over editable fields, copy/select-all wherever there's a
+// selection or an editable target. Roles act on the focused web contents, so
+// the same handler covers every input, the task editor, and selectable text.
+function installContextMenu(win) {
+  win.webContents.on('context-menu', (_e, params) => {
+    const { isEditable, editFlags } = params;
+    const hasSelection = !!(params.selectionText && params.selectionText.trim());
+    const template = [];
+    if (isEditable) {
+      template.push(
+        { role: 'undo', enabled: editFlags.canUndo },
+        { role: 'redo', enabled: editFlags.canRedo },
+        { type: 'separator' },
+        { role: 'cut', enabled: editFlags.canCut },
+      );
+    }
+    if (isEditable || hasSelection) {
+      template.push({ role: 'copy', enabled: editFlags.canCopy || hasSelection });
+    }
+    if (isEditable) {
+      template.push({ role: 'paste', enabled: editFlags.canPaste });
+    }
+    if (isEditable || hasSelection) {
+      template.push({ type: 'separator' }, { role: 'selectAll' });
+    }
+    if (!template.length) return;
+    Menu.buildFromTemplate(template).popup({ window: win });
+  });
 }
 
 // ---- window control IPC -------------------------------------------------
@@ -338,6 +394,20 @@ ipcMain.handle('workspaces:remove', (e, dirPath) => {
   return true;
 });
 
+// ---- share-meeting IPC --------------------------------------------------
+
+// The read-only LAN viewer server validates every shared path through the same
+// workspace sandbox that guards projects:read.
+shareServer.init({ resolveProject });
+
+// payload: { files:[path], title, view, scope } -> { active, primaryUrl, urls, port }
+ipcMain.handle('share:start', (e, payload) => shareServer.start(payload || {}));
+ipcMain.handle('share:stop', () => shareServer.stop());
+ipcMain.handle('share:status', () => shareServer.status());
+// Current Wi-Fi network name (or null) so the share UI can name the network
+// guests must join.
+ipcMain.handle('share:wifi', () => shareServer.wifiSsid());
+
 // ---- lifecycle ----------------------------------------------------------
 
 // Only one window ever: a second launch (e.g. clicking the desktop shortcut
@@ -359,6 +429,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', focusExistingWindow);
 
   app.whenReady().then(() => {
+    // Dev builds: make sure there's a workspace with test content to load.
+    ensureDevContent();
     // macOS shows the dock icon from the app bundle when packaged; set it
     // explicitly so it's correct when running unpackaged in dev too.
     if (process.platform === 'darwin' && app.dock) {
@@ -370,7 +442,12 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
+  // A share must never outlive the app: drop the server when the app is
+  // quitting or all its windows are gone.
+  app.on('before-quit', () => shareServer.stop());
+
   app.on('window-all-closed', () => {
+    shareServer.stop();
     if (process.platform !== 'darwin') app.quit();
   });
 }

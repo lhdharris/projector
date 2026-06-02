@@ -20,15 +20,31 @@
     return h;
   }
 
-  function dateRange(task) {
-    if (!task.start || !global.GanttParse.DATE_RE.test(task.start)) {
-      // "after X" or unspecified — let the Gantt resolve it; show what we have.
-      return task.start || '';
+  function dateRange(task, nameById) {
+    const start = (task.start || '').trim();
+    if (!start) return '';
+    const after = /^after\s+(.+)$/i.exec(start);
+    if (after) {
+      // Render dependencies by task name ("Starts after ‘X’ is finished") rather
+      // than the raw Mermaid id. nameById resolves each predecessor; unknown ids
+      // fall back to the id so we never lose information.
+      const names = after[1].split(/\s+/).filter(Boolean)
+        .map((id) => (nameById && nameById.get(id)) || id);
+      return afterLabel(names);
     }
+    if (!global.GanttParse.DATE_RE.test(start)) return start;
     const days = global.GanttParse.parseDurationDays(task.duration);
-    if (task.milestone || days <= 0) return task.start;
-    const end = global.GanttParse.addDays(task.start, days);
-    return `${task.start} → ${end}`;
+    if (task.milestone || days <= 0) return start;
+    const end = global.GanttParse.addDays(start, days);
+    return `${start} → ${end}`;
+  }
+
+  // "Starts after ‘X’ is finished", joining multiple predecessors naturally.
+  function afterLabel(names) {
+    const quoted = names.map((n) => `‘${n}’`);
+    if (quoted.length === 1) return `Starts after ${quoted[0]} is finished`;
+    const last = quoted.pop();
+    return `Starts after ${quoted.join(', ')} and ${last} are finished`;
   }
 
   // opts (all optional):
@@ -38,6 +54,9 @@
   function render(container, model, handlers, opts) {
     opts = opts || {};
     container.innerHTML = '';
+
+    // id -> name, so a card showing an "after <id>" dependency can name it.
+    const nameById = new Map(model.tasks.map((t) => [t.id, t.name || '']));
 
     for (const col of COLUMNS) {
       const colEl = document.createElement('div');
@@ -56,7 +75,7 @@
       colEl.appendChild(listEl);
 
       for (const task of tasks) {
-        listEl.appendChild(card(task, handlers, opts));
+        listEl.appendChild(card(task, handlers, opts, nameById));
       }
 
       if (!opts.readOnlyAdd) {
@@ -84,7 +103,7 @@
     }
   }
 
-  function card(task, handlers, opts) {
+  function card(task, handlers, opts, nameById) {
     opts = opts || {};
     const el = document.createElement('div');
     el.className = 'card' + (task.crit ? ' crit' : '') + (task.milestone ? ' milestone' : '');
@@ -133,7 +152,7 @@
     if (task.milestone) badges.push('<span class="badge ms">◆ milestone</span>');
     if (task.crit) badges.push('<span class="badge crit">critical</span>');
 
-    const range = dateRange(task);
+    const range = dateRange(task, nameById);
     el.innerHTML = `
       <div class="card-name">${escapeHtml(task.name || 'Untitled')}</div>
       <div class="card-badges">${badges.join('')}</div>

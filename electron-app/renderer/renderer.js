@@ -28,6 +28,7 @@
     profiles: [],       // roster of profile names (Work / Household / …)
     activeProfile: '',  // '' = All projects
     teamEditProfile: '',// which profile's roster the Settings panel is editing
+    centerGanttNext: false, // one-shot: centre today when the gantt next renders
   };
 
   // ---- window controls --------------------------------------------------
@@ -39,11 +40,6 @@
   // button doesn't flash red) until the mouse actually moves — same trick the
   // tabless-browser chrome uses.
   document.addEventListener('mousemove', () => document.body.classList.remove('no-hover'), { once: true });
-
-  // Track the cursor so menus we open without an event (e.g. the global-view
-  // project picker) can anchor near where the user just clicked.
-  const lastMouse = { x: 120, y: 120 };
-  document.addEventListener('mousemove', (e) => { lastMouse.x = e.clientX; lastMouse.y = e.clientY; });
 
   // ---- view toggle ------------------------------------------------------
   document.querySelectorAll('#view-toggle .seg-btn').forEach((btn) => {
@@ -64,6 +60,8 @@
   function setView(view) {
     state.view = view;
     localStorage.setItem('lastView', view); // remember the view across launches
+    // Opening the Timeline centres the today line; switching away clears the flag.
+    state.centerGanttNext = view === 'gantt';
     updateViewToggleButtons();
     renderCurrentView();
   }
@@ -73,6 +71,12 @@
       b.classList.toggle('active', b.dataset.view === state.view);
     });
   }
+
+  // ---- new task (toolbar) ----------------------------------------------
+  // Opens the task editor from anywhere, with a project picker; the project
+  // defaults to whatever's open (blank in Global). Disabled until a project exists.
+  byId('new-task-btn').addEventListener('click', () => { if (state.projects.length) openNewModal('todo'); });
+  function updateNewTaskBtn() { byId('new-task-btn').disabled = !state.projects.length; }
 
   // ---- sidebar ----------------------------------------------------------
   byId('new-project').addEventListener('click', (e) => { e.stopPropagation(); onNewProject(); });
@@ -97,6 +101,7 @@
     state.projects = projects;
     state.folders = folders;
     renderProjectList();
+    updateNewTaskBtn();
 
     if (selectFile) selectProject(selectFile);
     else if (state.currentFile && !state.projects.find((p) => p.file === state.currentFile)) {
@@ -242,6 +247,8 @@
     byId('global').hidden = true;
     localStorage.setItem('lastMode', 'project'); // restored on next launch
     localStorage.setItem('lastFile', file);
+    // Opening a project straight into the Timeline centres on today too.
+    if (state.view === 'gantt') state.centerGanttNext = true;
     renderCurrentView();
   }
 
@@ -315,7 +322,9 @@
       }, { colorForTask });
     } else {
       gt.hidden = false;
-      window.Gantt.render(byId('gantt-render'), state.model, { onEditTask: openEditModal }, { colorForTask });
+      window.Gantt.render(byId('gantt-render'), state.model, { onEditTask: openEditModal },
+        { colorForTask, centerOnToday: state.centerGanttNext });
+      state.centerGanttNext = false;
     }
   }
 
@@ -332,6 +341,7 @@
     ]);
     state.projects = list;
     state.folders = folders;
+    updateNewTaskBtn();
     state.global = [];
     for (const p of list.filter(inActiveProfile)) {
       const md = await window.projects.read(p.file);
@@ -357,6 +367,7 @@
     byId('gantt').hidden = true;
     byId('global').hidden = false;
     localStorage.setItem('lastMode', 'global'); // restored on next launch
+    if (state.view === 'gantt') state.centerGanttNext = true;
     renderGlobalView();
   }
 
@@ -396,7 +407,8 @@
       gg.hidden = false;
       window.Gantt.render(byId('global-gantt-render'), state.built.ganttModel, {
         onEditTask: openGlobalGanttTask,
-      }, { colorForTask: state.built.colorForGantt });
+      }, { colorForTask: state.built.colorForGantt, centerOnToday: state.centerGanttNext });
+      state.centerGanttNext = false;
     }
   }
 
@@ -407,10 +419,7 @@
     openGlobalTaskEditor(state.built.kInfo.get(gid));
   }
   function openGlobalGanttTask(nsid) {
-    const info = state.built.gInfo.get(nsid);
-    // The per-project summary bar isn't a real task — clicking it opens the project.
-    if (info && info.summary) return selectProject(info.file);
-    openGlobalTaskEditor(info);
+    openGlobalTaskEditor(state.built.gInfo.get(nsid));
   }
   function openGlobalTaskEditor(info) {
     if (!info) return;
@@ -475,36 +484,12 @@
   }
 
   // ---- team-view column actions (the "⋮" menu) -------------------------
-  // Add a task to a person in the global Team view: pick which project it lands
-  // in, then open the editor against that project's model + its own file writer.
-  async function addTaskGlobalForAssignee(assignee) {
+  // Add a task to a person in the global Team view. The task editor's own
+  // Project dropdown chooses the destination project (defaulting to the only one
+  // when there's a single project), so no separate pre-pick menu is needed.
+  function addTaskGlobalForAssignee(assignee) {
     if (!state.global.length) return;
-    const file = state.global.length === 1 ? state.global[0].file : await pickProject();
-    if (!file) return;
-    const proj = state.global.find((p) => p.file === file);
-    if (!proj) return;
-    openNewModal('todo', assignee, proj.model, async () => {
-      const md = await window.projects.read(file);
-      await window.projects.write(file, P.writeBackToMarkdown(md, proj.model));
-    });
-  }
-
-  // Choose a project from a menu anchored near the cursor (global add-task).
-  function pickProject() {
-    return new Promise((resolve) => {
-      let done = false;
-      const finish = (v) => { if (!done) { done = true; resolve(v); } };
-      showContextMenu(lastMouse.x, lastMouse.y, [
-        { header: 'Add task to project…' },
-        ...state.global.map((p) => ({ label: p.title, onClick: () => finish(p.file) })),
-      ]);
-      setTimeout(() => {
-        const obs = new MutationObserver(() => {
-          if (!byId('context-menu')) { obs.disconnect(); finish(null); }
-        });
-        obs.observe(document.body, { childList: true });
-      }, 0);
-    });
+    openNewModal('todo', assignee, state.global.length === 1 ? state.global[0].file : '');
   }
 
   // Delete a team member from the Team view: unassign their tasks within the
@@ -535,6 +520,9 @@
   byId('f-delete').addEventListener('click', onDeleteTask);
   byId('task-form').addEventListener('submit', onSaveTask);
   window.DatePicker.attach(byId('f-start')); // app-themed calendar popup
+  byId('f-start-mode').addEventListener('change', syncStartMode);
+  // Switching the destination project re-points the editor at it.
+  byId('f-project').addEventListener('change', (e) => applyTaskTarget(e.target.value));
   modal.addEventListener('mousedown', (e) => { if (e.target === modal) closeModal(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !modal.hidden) closeModal();
@@ -557,6 +545,62 @@
     };
     state.team.forEach(add);
     if (state.editModel) state.editModel.tasks.forEach((t) => add(t.assignee));
+  }
+
+  // Show the date picker or the "starts after another task" typeahead depending
+  // on the scheduling mode chosen in the editor's "Starts" dropdown.
+  function syncStartMode() {
+    const after = byId('f-start-mode').value === 'after';
+    byId('f-start-date-row').hidden = after;
+    byId('f-start-after-row').hidden = !after;
+  }
+
+  // Fill the "Starts after" typeahead with the other tasks in the model being
+  // edited (a task can't depend on itself) and build a name->id lookup so the
+  // typed name can be turned back into an "after <id>" dependency on save.
+  function populateAfterList() {
+    const dl = byId('after-list');
+    dl.innerHTML = '';
+    state.afterNameToId = new Map();
+    const tasks = state.editModel ? state.editModel.tasks : [];
+    for (const t of tasks) {
+      if (t.id === state.editingId) continue;
+      const name = (t.name || '').trim();
+      if (!name || state.afterNameToId.has(name)) continue;
+      state.afterNameToId.set(name, t.id);
+      const opt = document.createElement('option');
+      opt.value = name;
+      dl.appendChild(opt);
+    }
+  }
+
+  // Display name of the first task an "after <ids>" start refers to, used to
+  // prefill the typeahead when editing a dependency.
+  function afterDisplayName(start, model) {
+    const m = /^after\s+(.+)$/i.exec(String(start || '').trim());
+    if (!m || !model) return '';
+    const firstId = m[1].split(/\s+/).filter(Boolean)[0];
+    const ref = model.tasks.find((t) => t.id === firstId);
+    return ref ? (ref.name || '') : '';
+  }
+
+  // Resolve the editor's scheduling fields into a Mermaid start token: an ISO
+  // date, or "after <id>" when the user picked a predecessor task.
+  function readStartValue() {
+    if (byId('f-start-mode').value === 'after') {
+      const typed = byId('f-after').value.trim();
+      const orig = byId('f-after').dataset.orig || '';
+      const origName = byId('f-after').dataset.origName || '';
+      // Untouched field keeps the exact original, preserving a multi-task
+      // "after a b" that the single-select typeahead can't represent.
+      if (typed && typed === origName && orig) return orig;
+      const id = state.afterNameToId && state.afterNameToId.get(typed);
+      if (id) return `after ${id}`;
+      // No matching task chosen — fall back to a concrete date rather than write
+      // a dangling dependency.
+      return P.todayISO();
+    }
+    return byId('f-start').value.trim() || P.todayISO();
   }
 
   // Rosters are scoped to a profile so the user can keep a separate "Household"
@@ -873,12 +917,22 @@
     state.editingId = id;
     byId('modal-title').textContent = 'Edit task';
     byId('f-delete').hidden = false;
+    byId('f-project-row').hidden = true; // editing can't move a task between files
+    byId('f-save').disabled = false;
     populateAssigneeList();
+    populateAfterList();
 
     byId('f-name').value = t.name || '';
     byId('f-assignee').value = t.assignee || '';
+    const isAfter = /^after\s+/i.test(t.start || '');
+    byId('f-start-mode').value = isAfter ? 'after' : 'date';
     byId('f-start').value = P.DATE_RE.test(t.start || '') ? t.start : '';
     byId('f-start').dataset.orig = t.start || '';
+    const afterName = isAfter ? afterDisplayName(t.start, state.editModel) : '';
+    byId('f-after').value = afterName;
+    byId('f-after').dataset.orig = isAfter ? (t.start || '') : '';
+    byId('f-after').dataset.origName = afterName;
+    syncStartMode();
     byId('f-duration').value = Math.max(0, Math.round(P.parseDurationDays(t.duration)));
     byId('f-status').value = t.status;
     byId('f-crit').checked = !!t.crit;
@@ -887,27 +941,117 @@
     showModal();
   }
 
-  // status/assignee prefill the new task; model/save override the single-project
-  // context (the global Team view passes a source project's model + writer).
-  function openNewModal(status, assignee, model, save) {
+  // status/assignee prefill the new task. The task's destination project is
+  // chosen in the dialog's Project dropdown: it defaults to `presetFile` when
+  // given, else the open project (blank in Global view), and `applyTaskTarget`
+  // wires up the model + writer for whichever project is selected.
+  function openNewModal(status, assignee, presetFile) {
     state.editingId = null;
-    state.editModel = model || state.model;
-    state.editSave = save || saveModel;
     state.newStatus = status || 'todo';
     byId('modal-title').textContent = 'New task';
     byId('f-delete').hidden = true;
-    populateAssigneeList();
+
+    byId('f-project-row').hidden = false;
+    const dflt = (presetFile !== undefined ? presetFile
+      : (state.mode === 'project' ? state.currentFile : '')) || '';
+    populateProjectSelect(dflt);
+    applyTaskTarget(dflt); // sets editModel/editSave + populates assignee/after lists
 
     byId('f-name').value = '';
     byId('f-assignee').value = assignee || '';
+    byId('f-start-mode').value = 'date';
     byId('f-start').value = P.todayISO();
     byId('f-start').dataset.orig = '';
+    byId('f-after').value = '';
+    byId('f-after').dataset.orig = '';
+    byId('f-after').dataset.origName = '';
+    syncStartMode();
     byId('f-duration').value = 3;
     byId('f-status').value = status || 'todo';
     byId('f-crit').checked = false;
     byId('f-milestone').checked = false;
 
     showModal();
+  }
+
+  // Fill the destination dropdown with every project, grouped by workspace, and
+  // select `selectedFile` (a blank "Choose a project…" entry stays selectable so
+  // the dialog can open with nothing chosen from the Global view).
+  function populateProjectSelect(selectedFile) {
+    const sel = byId('f-project');
+    sel.innerHTML = '';
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = 'Choose a project…';
+    sel.appendChild(ph);
+    const grouped = new Set();
+    for (const folder of state.folders) {
+      const inFolder = state.projects.filter((p) => p.folderPath === folder.path);
+      if (!inFolder.length) continue;
+      grouped.add(folder.path);
+      const og = document.createElement('optgroup');
+      og.label = folder.name;
+      for (const p of inFolder) {
+        const o = document.createElement('option');
+        o.value = p.file;
+        o.textContent = p.title;
+        og.appendChild(o);
+      }
+      sel.appendChild(og);
+    }
+    // Defensive: any project not under a listed workspace, flat at the end.
+    for (const p of state.projects) {
+      if (grouped.has(p.folderPath)) continue;
+      const o = document.createElement('option');
+      o.value = p.file;
+      o.textContent = p.title;
+      sel.appendChild(o);
+    }
+    sel.value = selectedFile || '';
+  }
+
+  // Point the editor at the chosen destination project: set the model it edits
+  // and the writer that persists it, then refresh the assignee + "after" lists so
+  // they reflect that project. Save stays disabled until a project is picked.
+  async function applyTaskTarget(file) {
+    const saveBtn = byId('f-save');
+    if (!file) {
+      state.editModel = { tasks: [] };
+      state.editSave = null;
+      saveBtn.disabled = true;
+      populateAssigneeList();
+      populateAfterList();
+      return;
+    }
+    saveBtn.disabled = false;
+    if (state.mode === 'project' && file === state.currentFile && state.model) {
+      // The project already on screen — reuse its live model + writer.
+      state.editModel = state.model;
+      state.editSave = saveModel;
+    } else {
+      const g = state.global.find((p) => p.file === file);
+      if (g) {
+        // A project loaded in the global view — edit its model, write its file.
+        state.editModel = g.model;
+        state.editSave = async () => {
+          const md = await window.projects.read(file);
+          await window.projects.write(file, P.writeBackToMarkdown(md, g.model));
+        };
+      } else {
+        // A project not currently in memory — load it, then open it on save so
+        // the user lands on their new task.
+        const md = await window.projects.read(file);
+        const m = P.parseGantt(P.extractMermaidBlock(md).code);
+        state.editModel = m;
+        state.editSave = async () => {
+          const cur = await window.projects.read(file);
+          await window.projects.write(file, P.writeBackToMarkdown(cur, m));
+          await loadProjects(file);
+        };
+      }
+    }
+    populateAssigneeList();
+    populateAfterList();
   }
 
   function showModal() {
@@ -923,19 +1067,16 @@
     e.preventDefault();
     const name = byId('f-name').value.trim();
     if (!name) return;
+    // New tasks need a destination project (the picker is hidden when editing).
+    if (!state.editingId && (!state.editSave || !state.editModel)) return;
 
     const assignee = byId('f-assignee').value.trim(); // '' = unassigned
     rememberAssignee(assignee);
-    const startInput = byId('f-start').value.trim();
-    const origStart = byId('f-start').dataset.orig || '';
     const milestone = byId('f-milestone').checked;
     const durDays = Math.max(0, parseInt(byId('f-duration').value, 10) || 0);
 
-    // Preserve an "after <id>" start if the user left the date untouched.
-    let start;
-    if (startInput) start = startInput;
-    else if (origStart && !P.DATE_RE.test(origStart)) start = origStart; // keep "after X"
-    else start = P.todayISO();
+    // "On a date" -> ISO date; "After another task" -> "after <id>".
+    const start = readStartValue();
 
     const duration = milestone ? '0d' : `${durDays || 1}d`;
 
@@ -1581,6 +1722,260 @@
     if (g) g.color = hex;
     rerender();
   }
+
+  // ---- share meeting ----------------------------------------------------
+  // The export button opens a dropdown (room for more items later); "Share
+  // meeting" lets you pick a project / workspace / all, then spins up the
+  // read-only LAN viewer (main process) and shows its address.
+  let shareInfo = null;       // { active, primaryUrl, urls, port, title } while live
+  let shareSelection = null;  // the picker row currently chosen
+  let shareWifi = null;       // detected Wi-Fi SSID (or null) for the share copy
+
+  byId('export-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const r = byId('export-btn').getBoundingClientRect();
+    const items = shareInfo
+      ? [
+          { label: 'Sharing — show link', onClick: openShareModal },
+          { label: 'Copy share link', onClick: () => copyText(shareInfo.primaryUrl) },
+          { separator: true },
+          { label: 'Stop sharing', danger: true, onClick: stopShare },
+        ]
+      : [{ label: 'Share meeting', onClick: openShareModal }];
+    // Drop the menu straight down from the button's top-left corner (same
+    // top-left anchoring the new-project workspace picker uses).
+    showContextMenu(r.left, r.bottom + 4, items);
+  });
+
+  function setExportSharing(on) { byId('export-btn').classList.toggle('sharing', !!on); }
+
+  function openShareModal() {
+    if (shareInfo) showActiveSharePanel();
+    else {
+      byId('share-active').hidden = true;
+      byId('share-warn').hidden = true;
+      byId('share-picker').hidden = false;
+      buildShareOptions();
+      refreshShareWifi();
+    }
+    byId('share-backdrop').hidden = false;
+  }
+  function closeShareModal() { byId('share-backdrop').hidden = true; }
+
+  // Detect the current Wi-Fi network so the picker can name it and the warning /
+  // active panels can be specific about which network guests must join. Shows the
+  // last-known value immediately, then refreshes once the lookup returns.
+  function refreshShareWifi() {
+    setShareWifiNote(shareWifi);
+    window.share?.wifi().then((ssid) => {
+      shareWifi = ssid || null;
+      setShareWifiNote(shareWifi);
+    }).catch(() => {});
+  }
+
+  // SSID quoted for plain-text copy, or a generic phrase when unknown.
+  function wifiPhrase() { return shareWifi ? `the “${shareWifi}” Wi-Fi` : 'your Wi-Fi'; }
+
+  function setShareWifiNote(ssid) {
+    const t = byId('share-wifi-note').querySelector('.share-wifi-text');
+    t.textContent = '';
+    if (ssid) {
+      t.append('Everyone must be on the same Wi-Fi as this computer: ');
+      const strong = document.createElement('strong');
+      strong.textContent = ssid;
+      t.append(strong);
+    } else {
+      t.append('Everyone must be on the same Wi-Fi network as this computer.');
+    }
+  }
+
+  // Step 1b: warn that an OS firewall prompt is coming BEFORE it appears, so the
+  // password/approval dialog is never a surprise. Continue actually starts.
+  function showShareWarn() {
+    if (!shareSelection) return;
+    byId('share-warn').querySelector('.share-warn-body').textContent =
+      `To let other devices on ${wifiPhrase()} reach this shared view, your computer ` +
+      `will ask for permission — a password or a security approval — to allow it through ` +
+      `the firewall. This only opens access to this shared content, nothing else.`;
+    byId('share-picker').hidden = true;
+    byId('share-warn').hidden = false;
+  }
+
+  // Build the radio list: "All projects", then each workspace (share the whole
+  // folder + each of its projects), filtered by the active profile.
+  function buildShareOptions() {
+    const container = byId('share-options');
+    container.innerHTML = '';
+    shareSelection = null;
+
+    const all = state.projects.filter(inActiveProfile);
+    const startBtn = byId('share-start');
+    if (!all.length) {
+      container.innerHTML = '<div class="share-empty">No projects to share yet.</div>';
+      startBtn.disabled = true;
+      return;
+    }
+    startBtn.disabled = false;
+
+    const opts = [];
+    opts.push({
+      kind: 'all',
+      label: state.activeProfile ? `All ${state.activeProfile} projects` : 'All projects',
+      title: state.activeProfile ? `${state.activeProfile} — all projects` : 'All projects',
+      files: all.map((p) => p.file),
+      count: all.length,
+    });
+    for (const folder of state.folders) {
+      const inFolder = all.filter((p) => p.folderPath === folder.path);
+      if (!inFolder.length) continue;
+      opts.push({ kind: 'head', label: folder.name });
+      if (inFolder.length > 1) {
+        opts.push({
+          kind: 'workspace', sub: true,
+          label: `Everything in ${folder.name}`, title: folder.name,
+          files: inFolder.map((p) => p.file), count: inFolder.length,
+        });
+      }
+      for (const p of inFolder) {
+        opts.push({ kind: 'project', sub: true, label: p.title, title: p.title, files: [p.file], color: window.Palette.colorFor(p) });
+      }
+    }
+
+    // Preselect whatever's on screen: the open project, else "All projects".
+    let preselect = opts[0];
+    if (state.mode === 'project' && state.currentFile) {
+      const found = opts.find((o) => o.kind === 'project' && o.files[0] === state.currentFile);
+      if (found) preselect = found;
+    }
+
+    for (const o of opts) {
+      if (o.kind === 'head') {
+        const h = document.createElement('div');
+        h.className = 'share-opt-head';
+        h.textContent = o.label;
+        container.appendChild(h);
+        continue;
+      }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'share-opt' + (o.sub ? ' sub' : '');
+      const dot = o.color ? `<span class="so-dot" style="background:${o.color}"></span>` : '';
+      const count = o.count ? `<span class="so-count">${o.count}</span>` : '';
+      b.innerHTML = `<span class="so-radio"></span>${dot}<span class="so-label"></span>${count}`;
+      b.querySelector('.so-label').textContent = o.label;
+      b.addEventListener('click', () => {
+        shareSelection = o;
+        container.querySelectorAll('.share-opt').forEach((el) => el.classList.remove('selected'));
+        b.classList.add('selected');
+      });
+      o._el = b;
+      container.appendChild(b);
+    }
+    if (preselect && preselect._el) { shareSelection = preselect; preselect._el.classList.add('selected'); }
+  }
+
+  // Triggered from the warning step's "Continue & start": this is the call that
+  // spins up the server and (in the main process) raises the firewall prompt.
+  async function startShare() {
+    if (!shareSelection) return;
+    const { files, title } = shareSelection;
+    const btn = byId('share-warn-continue');
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+    try {
+      const res = await window.share.start({ files, title, view: state.view });
+      shareInfo = Object.assign({}, res, { title });
+      setExportSharing(true);
+      showActiveSharePanel();
+    } catch (err) {
+      window.alert('Could not start sharing: ' + ((err && err.message) || err));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Continue & start';
+    }
+  }
+
+  function showActiveSharePanel() {
+    byId('share-picker').hidden = true;
+    byId('share-warn').hidden = true;
+    byId('share-active').hidden = false;
+    byId('share-url').textContent = shareInfo.primaryUrl;
+
+    const alt = byId('share-alt');
+    alt.innerHTML = '';
+    const extras = (shareInfo.urls || []).filter((u) => u !== shareInfo.primaryUrl);
+    if (extras.length) {
+      const lead = document.createElement('div');
+      lead.className = 'share-alt-item';
+      lead.textContent = 'Other addresses to try:';
+      alt.appendChild(lead);
+      for (const u of extras) {
+        const d = document.createElement('div');
+        d.className = 'share-alt-item';
+        d.textContent = u;
+        alt.appendChild(d);
+      }
+    }
+    byId('share-scope-note').textContent =
+      `Sharing “${shareInfo.title}”. It updates live as you work — anyone on ${wifiPhrase()} with this link can view it (read-only) until you stop.`;
+  }
+
+  async function stopShare() {
+    try { await window.share.stop(); } catch { /* already gone */ }
+    shareInfo = null;
+    setExportSharing(false);
+    closeShareModal();
+  }
+
+  // Clipboard with a file:// fallback (the async Clipboard API can be blocked).
+  function copyText(text) {
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { /* nothing more we can do */ }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(fallback);
+    }
+    fallback();
+    return Promise.resolve();
+  }
+
+  byId('share-start').addEventListener('click', showShareWarn);
+  byId('share-warn-continue').addEventListener('click', startShare);
+  byId('share-warn-back').addEventListener('click', () => {
+    byId('share-warn').hidden = true;
+    byId('share-picker').hidden = false;
+  });
+  byId('share-cancel').addEventListener('click', closeShareModal);
+  byId('share-done').addEventListener('click', closeShareModal);
+  byId('share-stop').addEventListener('click', stopShare);
+  byId('share-copy').addEventListener('click', () => {
+    copyText(shareInfo ? shareInfo.primaryUrl : byId('share-url').textContent);
+    const btn = byId('share-copy');
+    btn.classList.add('copied');
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.classList.remove('copied'); btn.textContent = 'Copy'; }, 1400);
+  });
+  byId('share-backdrop').addEventListener('mousedown', (e) => {
+    if (e.target === byId('share-backdrop')) closeShareModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !byId('share-backdrop').hidden) closeShareModal();
+  });
+
+  // A window reload re-runs the renderer while the main-process server keeps
+  // running; restore the active-share state so the button stays lit.
+  window.share?.status().then((s) => {
+    if (s && s.active) { shareInfo = Object.assign({}, s); setExportSharing(true); }
+  }).catch(() => {});
 
   // ---- helpers ----------------------------------------------------------
   function byId(id) { return document.getElementById(id); }

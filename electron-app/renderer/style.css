@@ -137,6 +137,60 @@ body:not(.no-hover) #toolbar #wm-buttons button:hover { background: rgba(0, 0, 0
 body:not(.no-hover) #toolbar #wm-buttons #close:hover { background: #e81123; color: #fff; }
 #toolbar #wm-buttons #close:active { background: #c50f1f; color: #fff; }
 
+/* Export / share button — pinned to the top-left corner of the toolbar. */
+#toolbar #export-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #444;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+body:not(.no-hover) #toolbar #export-btn:hover { background: rgba(0, 0, 0, 0.08); }
+#toolbar #export-btn:active { background: rgba(0, 0, 0, 0.14); }
+/* Slow green pulse while a share is live (greens borrow the gantt done-task
+   palette for consistency). The .sharing class is toggled by setExportSharing(). */
+@keyframes export-share-pulse {
+  0%, 100% { background: #e3f4e7; color: #1f7a3a; box-shadow: 0 0 0 0 rgba(110, 180, 130, 0); }
+  50%      { background: #cdeed6; color: #15672f; box-shadow: 0 0 0 3px rgba(110, 180, 130, 0.25); }
+}
+#toolbar #export-btn.sharing { animation: export-share-pulse 2.4s ease-in-out infinite; }
+body:not(.no-hover) #toolbar #export-btn.sharing:hover { background: #cdeed6; }
+/* Respect reduced-motion: hold a steady green instead of pulsing. */
+@media (prefers-reduced-motion: reduce) {
+  #toolbar #export-btn.sharing { animation: none; background: #d9f0df; color: #1f7a3a; }
+}
+
+/* New Task: a distinct pill (soft drop shadow) sitting just right of the Share
+   button, so it stands apart from the flat toolbar icons. */
+#toolbar #new-task-btn {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px 0 9px;
+  border: 1px solid #cdd6dd;
+  border-radius: 15px;
+  background: #ffffff;
+  color: #2b6b8f;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: background 0.12s ease, box-shadow 0.12s ease, color 0.12s ease;
+}
+#toolbar #new-task-btn .nt-plus { font-size: 16px; line-height: 1; font-weight: 700; }
+body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22); }
+#toolbar #new-task-btn:active { background: #e9f3f9; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+#toolbar #new-task-btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+
 /* ---- body layout ---- */
 #body { flex: 1 1 auto; display: flex; min-height: 0; }
 
@@ -662,7 +716,28 @@ body:not(.no-hover) #toolbar #wm-buttons #close:hover { background: #e81123; col
   padding: 8px 18px;
   border-bottom: 1px solid #ececec;
   background: #fafafa;
+  position: relative; /* positioning context for the centered title */
 }
+/* Timeline title: centered over the toolbar (which spans the content width) so
+   it stays in the middle of the view while the chart scrolls beneath it. */
+.gantt-title {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: #555;
+  pointer-events: none;
+}
+.gantt-title:empty { display: none; }
+/* The title now lives in the toolbar; hide Mermaid's in-SVG title, which is
+   centered on the (scrolling) chart width and so drifts out of the view. */
+#gantt-render .titleText, #global-gantt-render .titleText { display: none; }
 .gantt-zoom {
   display: flex;
   align-items: center;
@@ -685,7 +760,27 @@ body:not(.no-hover) #toolbar #wm-buttons #close:hover { background: #e81123; col
 #gantt-zoom-out, #gantt-zoom-in, #g-zoom-out, #g-zoom-in { font-size: 16px; line-height: 1; width: 34px; }
 #gantt-zoom-label, #g-zoom-label { font-size: 12px; min-width: 52px; font-variant-numeric: tabular-nums; }
 
-.gantt-scroll { flex: 1 1 auto; overflow: auto; padding: 24px; background: #ffffff; }
+/* No bottom padding: the floating date axis pins to `bottom: 0` of this scroll
+   box, so any bottom padding would leave a gap below it where scrolled chart
+   content (gridlines, today line) shows through. Zeroing it seats the date row
+   flush against the very bottom of the window. */
+.gantt-scroll {
+  flex: 1 1 auto; overflow: auto; padding: 24px 24px 0; background: #ffffff;
+  /* Column flex so a short chart can be vertically centred (see the auto margins
+     below). Left as a top-anchored block, mermaid sizes the SVG to just its rows
+     and leaves a tall band of whitespace between the bottom date axis and the
+     window edge. */
+  display: flex; flex-direction: column; align-items: flex-start;
+}
+/* Centre a short chart vertically so its bottom date axis drops toward the
+   middle of the window instead of clinging to the top with a big empty band
+   below. The auto top+bottom margins split the free space, so the dates sit
+   roughly halfway down rather than right under the toolbar; when the chart is
+   taller than the viewport both margins resolve to 0, leaving the top of a long
+   timeline scrollable as before. align-items:flex-start keeps the (often wider-
+   than-viewport) chart at its natural width so it still scrolls horizontally. */
+.gantt-scroll > #gantt-render,
+.gantt-scroll > #global-gantt-render { margin-top: auto; margin-bottom: auto; }
 /* When the chart is empty (or errored) there's no wide SVG to scroll, so centre
    the placeholder message in the viewport instead of leaving it pinned left
    against the inline-block render container. */
@@ -695,6 +790,27 @@ body:not(.no-hover) #toolbar #wm-buttons #close:hover { background: #e81123; col
 .gantt-scroll:has(.gantt-empty) #gantt-render { margin: auto; }
 #gantt-render, #global-gantt-render { min-width: 0; display: inline-block; }
 #gantt-render svg, #global-gantt-render svg { max-width: none; display: block; }
+/* Floating date axis: a sticky mirror of the chart's bottom axis. It lives
+   inside the inline-block render box so it scrolls horizontally with the chart,
+   while position:sticky keeps the dates pinned to the bottom of the viewport
+   whenever the chart is taller than the scroll area. A negative top margin (set
+   in JS) overlaps it on the real axis when the chart fits, so it's invisible
+   until it needs to detach. */
+.gantt-axis-float {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  background: #ffffff;
+  box-shadow: 0 -1px 0 #ececec;
+  pointer-events: none;
+  z-index: 2;
+}
+/* Show only the date labels in the floating strip — the cloned gridlines and
+   axis domain line run off the top of the band and would just be clutter. */
+.gantt-axis-float .tick line,
+.gantt-axis-float .domain { display: none; }
 /* Mermaid renders the date gridlines with a mix of inherited/sub-pixel stroke
    widths, so some lines look heavier than others. Pin them to a uniform 1px,
    crisply aligned, so the timeline grid reads as evenly spaced. */
@@ -703,6 +819,26 @@ body:not(.no-hover) #toolbar #wm-buttons #close:hover { background: #e81123; col
   stroke: #e2e2e2;
   stroke-width: 1px;
   shape-rendering: crispEdges;
+}
+/* Faint rules between the per-project bands in the global (grouped) timeline. */
+#global-gantt-render .gantt-group-sep {
+  stroke: #ececec;
+  stroke-width: 1px;
+  shape-rendering: crispEdges;
+}
+/* Uniform 1px weight for the chart's other straight structural lines — the axis
+   baseline/domain and the red today marker — so they match the 1px gridlines
+   above instead of rendering heavier (Mermaid defaults the today line to 2px). */
+#gantt-render .grid path, #global-gantt-render .grid path,
+#gantt-render .today, #global-gantt-render .today {
+  stroke-width: 1px;
+  shape-rendering: crispEdges;
+}
+/* Task-bar outlines at 1px too (no crispEdges, so their rounded corners stay
+   smooth). recolour() sets only the stroke colour, leaving this width intact. */
+#gantt-render rect.task, #global-gantt-render rect.task,
+#gantt-render .task path, #global-gantt-render .task path {
+  stroke-width: 1px;
 }
 /* Clickable task bars + labels */
 .gantt-clickable { cursor: pointer; }
@@ -1010,3 +1146,176 @@ label.chk input { width: auto; }
 #modal-actions .primary:hover { background: #2e8fd2; }
 #modal-actions .danger { border-color: #e7c4bc; color: #b3261e; }
 #modal-actions .danger:hover { background: #fbeae7; }
+
+/* ---- share-meeting modal ---- */
+#share-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 210;
+}
+#share-backdrop[hidden] { display: none; }
+#share-modal {
+  width: 400px;
+  max-width: calc(100vw - 40px);
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  padding: 20px;
+}
+#share-modal-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 12px; }
+.share-hint { font-size: 13px; color: #777; line-height: 1.45; margin-bottom: 12px; }
+
+/* Same-Wi-Fi requirement — a boxed callout naming the network (when known) so
+   the host can tell guests which Wi-Fi to join. */
+.share-wifi-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #eef6fb;
+  border: 1px solid #cfe4f1;
+  border-radius: 8px;
+  color: #2b6b8f;
+}
+.share-wifi-note .share-wifi-icon { flex: 0 0 auto; }
+.share-wifi-note .share-wifi-text { font-size: 13px; line-height: 1.4; }
+.share-wifi-note .share-wifi-text strong { color: #1c5374; font-weight: 700; }
+
+/* radio list of things you can share */
+#share-options { display: flex; flex-direction: column; gap: 2px; max-height: 46vh; overflow: auto; margin: 0 -4px; }
+.share-opt-head {
+  padding: 10px 8px 3px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #aaa;
+}
+.share-opt {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none; border-radius: 7px;
+  background: transparent; color: #333; font: inherit; font-size: 14px; text-align: left;
+  cursor: pointer;
+}
+.share-opt:hover { background: rgba(0, 0, 0, 0.05); }
+.share-opt.selected { background: #e3eef4; }
+.share-opt.sub { padding-left: 22px; }
+.share-opt .so-radio {
+  flex: 0 0 auto;
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid #c2c2c2; background: #fff;
+}
+.share-opt.selected .so-radio { border-color: #3f9fe0; box-shadow: inset 0 0 0 3px #3f9fe0; }
+.share-opt .so-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-opt .so-count { flex: 0 0 auto; font-size: 12px; color: #aaa; }
+.share-opt .so-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12); }
+.share-empty { font-size: 13px; color: #999; padding: 10px 8px; }
+
+.share-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.share-actions .spacer { flex: 1; }
+.share-actions button {
+  font: inherit; font-size: 14px;
+  padding: 7px 16px; border-radius: 6px;
+  border: 1px solid #cfcfcf; background: #fff; color: #333; cursor: pointer;
+}
+.share-actions button:hover { background: #f3f3f3; }
+.share-actions .primary { background: #3f9fe0; border-color: #3f9fe0; color: #fff; font-weight: 600; }
+.share-actions .primary:hover { background: #2e8fd2; }
+.share-actions .danger { border-color: #e7c4bc; color: #b3261e; }
+.share-actions .danger:hover { background: #fbeae7; }
+
+/* active-share panel */
+.share-url-row { display: flex; align-items: stretch; gap: 8px; }
+.share-url {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center;
+  padding: 10px 12px;
+  background: #f4f6f7; border: 1px solid #e2e2e2; border-radius: 7px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px; color: #1a5b7a; font-weight: 600;
+  overflow: auto; white-space: nowrap;
+  user-select: all;
+}
+.share-copy {
+  flex: 0 0 auto;
+  padding: 0 14px; border-radius: 7px;
+  border: 1px solid #cfcfcf; background: #fff; color: #333; font: inherit; font-size: 13px; cursor: pointer;
+}
+.share-copy:hover { background: #f3f3f3; }
+.share-copy.copied { background: #d7ecdd; border-color: #9ed4ae; color: #1f7a3d; }
+.share-alt { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.share-alt-item { font-size: 12px; color: #999; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.share-scope-note { margin-top: 12px; font-size: 12.5px; color: #888; line-height: 1.4; }
+.share-trouble { margin-top: 10px; font-size: 11.5px; color: #aaa; line-height: 1.4; }
+
+/* Step 1b: firewall heads-up shown before the OS password/approval prompt. */
+#share-warn[hidden] { display: none; }
+.share-warn-icon { display: flex; justify-content: center; color: #d9863b; margin: 6px 0 10px; }
+.share-warn-title { font-size: 14.5px; font-weight: 600; color: #2a2a2a; text-align: center; margin-bottom: 8px; }
+.share-warn-body { font-size: 13px; color: #777; line-height: 1.5; text-align: center; }
+
+/* ---- shared browser viewer (body.share-view) ---- */
+/* The viewer reuses the app's stylesheet; these rules only apply on the served
+   page, never in the app itself. */
+.share-title {
+  flex: 0 0 auto;
+  font-size: 14px; font-weight: 600; color: #444;
+  padding: 0 6px; max-width: 40%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.share-badge {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: #1f7a3d; font-weight: 600;
+  padding: 0 4px;
+}
+.share-dot { width: 8px; height: 8px; border-radius: 50%; background: #3fbf6a; box-shadow: 0 0 0 3px rgba(63, 191, 106, 0.22); }
+body.share-view.disconnected .share-dot { background: #c0c0c0; box-shadow: 0 0 0 3px rgba(0,0,0,0.08); }
+body.share-view.disconnected .share-badge { color: #999; }
+/* Read-only: no edit affordances, no grab cursor. */
+body.share-view .card,
+body.share-view .gantt-clickable,
+body.share-view .pi-title { cursor: default; }
+body.share-view .kanban-add,
+body.share-view .col-menu-btn { display: none; }
+body.share-view .card-status-tag { pointer-events: none; }
+
+/* Keep the app's position:fixed; inset:0 shell (it fills the viewport robustly
+   even under the root `zoom`, where an explicit height:100dvh would be scaled by
+   the zoom factor and overflow the screen). The fix for "can't scroll down" is
+   the flex chain below: #main / #kanban need min-height:0 or they grow to their
+   content's full height (a long Kanban column, the timeline) and push the bottom
+   off the screen, clipped by #app's overflow:hidden where it can't be reached.
+   With min-height:0 the panes are bounded to the viewport and scroll internally
+   instead. (#gantt and #team already set this; #kanban and #main didn't.) */
+body.share-view #main,
+body.share-view #kanban,
+body.share-view #global-kanban { min-height: 0; }
+
+/* ---- narrow screens (phones): stop the top bar overlapping itself ---- */
+/* The view toggle is absolutely centred in the top bar, so on a wide window it
+   floats over the middle with the title at the left and the "Live view" badge at
+   the right. On a phone there isn't room for all three across one row, so they
+   pile on top of each other. Drop it into normal flow on its own second row and
+   let the title + badge share the first. (Scoped to the viewer + a phone-width
+   query; the app's own window never gets this narrow.) */
+@media (max-width: 640px) {
+  body.share-view #toolbar {
+    flex: 0 0 auto;        /* was a fixed 48px tall single row */
+    flex-wrap: wrap;
+    height: auto;
+    row-gap: 6px;
+    padding: 8px 10px;
+  }
+  body.share-view #drag-space { display: none; } /* window-drag filler: no-op in a browser */
+  body.share-view .share-title { order: 0; flex: 1 1 auto; min-width: 0; max-width: none; }
+  body.share-view .share-badge { order: 1; }
+  body.share-view #view-toggle {
+    order: 2;
+    position: static;      /* was absolute-centred — that's what overlapped the title/badge */
+    transform: none;
+    flex: 1 0 100%;        /* a full-width row of its own, under the title + badge */
+    justify-content: center;
+  }
+  body.share-view .seg-btn { padding: 5px 10px; } /* a touch tighter so all three tabs fit */
+}

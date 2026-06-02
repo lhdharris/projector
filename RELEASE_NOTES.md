@@ -1,13 +1,27 @@
-# Projector v1.1.2 (pre-release)
+# Projector v1.2.0 (pre-release)
 
 A local-first project & **team** planner built on plain Markdown + Mermaid
 gantt charts. Every project is just a `.md` file in a folder you control — no
 cloud account, no subscription, no server. Point it at a synced or shared folder
-and a small team can plan, assign work, and track status together while the data
-stays entirely on your own disks.
+and a small team can plan, set goals, assign work, and track status together
+while the data stays entirely on your own disks.
 
 Made for self-hosting and local-org folks who want to run a team without paying
 for a cloud service.
+
+## New in v1.2 — Powerful local share
+- **Share a live, read-only view over your own Wi-Fi.** One click spins up a tiny
+  local web viewer; anyone on the **same Wi-Fi network** can open it in a browser
+  and watch your board/timeline update live — no accounts, nothing leaves your LAN.
+- The share screen now **names the Wi-Fi network** guests must join, so it's clear
+  who can connect.
+- A clear **heads-up before the firewall prompt**: Projector tells you it's about
+  to ask for permission to open the firewall *for this shared view only*, before
+  the password/approval dialog appears.
+- **Cross-platform firewall handling** for Linux, macOS, and Windows.
+- The phone view is **~20% larger** so shared boards/timelines are easier to read.
+- Toolbar tidy-up: **New Task** is the leftmost button; **Share** sits next to the
+  window controls.
 
 ## Highlights
 - **Kanban, Team, and Gantt views** over the same `.md` files — columns are
@@ -17,21 +31,15 @@ for a cloud service.
   Household / etc.
 - Frameless, minimalist UI.
 
-## Fixed in this build
-- The side panel now refreshes correctly after **deleting a project** or
-  **closing a workspace** while in Global view (previously the removed item
-  lingered in the list until reload).
-
 ## Downloads
 | Platform | File |
 |---|---|
-| macOS | `Projector-1.1.2*.dmg` |
-| Windows | `Projector Setup 1.1.2.exe` |
-| Debian/Ubuntu | `projector-app_1.1.2_amd64.deb` |
-| Fedora/RHEL (RPM) | `projector-app-1.1.2.x86_64.rpm` |
+| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.2.0.x86_64.rpm` |
+| Debian/Ubuntu (DEB) | `projector-app_1.2.0_amd64.deb` |
 
-> These builds are **unsigned**. macOS: right-click → Open (or
-> `xattr -dr com.apple.quarantine /Applications/Projector.app`). Windows
-> SmartScreen: More info → Run anyway. Linux: `sudo rpm -i …` / `sudo dpkg -i …`.
+> macOS `.dmg` and Windows `.exe` builds aren't part of this Linux pre-release —
+> they can be added to the release later.
+
+> These builds are **unsigned**. Linux: `sudo rpm -i …` / `sudo dpkg -i …`.
 
 This is a **pre-release** — expect rough edges; feedback welcome.
