@@ -254,10 +254,10 @@
     </div>
   </div>
 
-  <!-- Share meeting modal: pick what to share, then show the LAN address -->
+  <!-- Start meeting modal: pick what to share, then show the LAN address -->
   <div id="share-backdrop" hidden>
     <div id="share-modal">
-      <div id="share-modal-title">Share meeting</div>
+      <div id="share-modal-title">Start meeting</div>
 
       <!-- Step 1: pick a project / workspace / all -->
       <div id="share-picker">
@@ -309,6 +309,22 @@
           <button type="button" id="share-copy" class="share-copy">Copy</button>
         </div>
         <div id="share-alt" class="share-alt"></div>
+
+        <!-- Scan-to-open QR + the PIN guests must enter. Both are filled by
+             renderer.js showActiveSharePanel (QR from the link, PIN from the
+             server). -->
+        <div class="share-join">
+          <div class="share-qr-wrap">
+            <div id="share-qr" class="share-qr" aria-label="QR code for the meeting link"></div>
+            <div class="share-qr-cap">Scan to open on a phone</div>
+          </div>
+          <div class="share-pin-block">
+            <div class="share-pin-label">Meeting PIN</div>
+            <div id="share-pin" class="share-pin"></div>
+            <div class="share-pin-hint">Guests enter this PIN to view</div>
+          </div>
+        </div>
+
         <div id="share-scope-note" class="share-scope-note"></div>
         <div class="share-trouble">Can’t connect? Approve the firewall prompt when sharing starts, and check that your Wi-Fi lets devices talk to each other.</div>
         <div class="share-actions">
@@ -320,14 +336,100 @@
     </div>
   </div>
 
+  <!-- Export to PDF: pick scope + which pages to include, then save a PDF -->
+  <div id="pdf-backdrop" hidden>
+    <div id="pdf-modal">
+      <div id="pdf-modal-title">Export to PDF</div>
+
+      <div class="pdf-section-label">Choose which projects to include</div>
+      <div id="pdf-projects" class="pdf-checklist"></div>
+
+      <div class="pdf-section-label">Pages</div>
+
+      <div class="pdf-opt">
+        <input type="checkbox" id="pdf-forecast-on" checked>
+        <div class="pdf-opt-body">
+          <label for="pdf-forecast-on" class="pdf-opt-title">Forecast page</label>
+          <div class="pdf-opt-desc">A focused timeline of just the next
+            <input type="number" id="pdf-forecast-days" class="pdf-days" min="1" max="120" value="7"> days,
+            so the meeting can be about a specific window.</div>
+        </div>
+      </div>
+
+      <div class="pdf-opt">
+        <input type="checkbox" id="pdf-team-on" checked>
+        <div class="pdf-opt-body">
+          <label for="pdf-team-on" class="pdf-opt-title">Team page</label>
+          <div class="pdf-opt-desc">Each team member's tasks for the window, as a dated checklist.
+            <span id="pdf-team-days-wrap">Next
+              <input type="number" id="pdf-team-days" class="pdf-days" min="1" max="120" value="7"> days.</span>
+            <span id="pdf-team-shared" hidden>Uses the same window as the forecast above.</span></div>
+        </div>
+      </div>
+
+      <div class="pdf-opt">
+        <input type="checkbox" id="pdf-global-on" checked>
+        <div class="pdf-opt-body">
+          <label for="pdf-global-on" class="pdf-opt-title">Global timeline</label>
+          <div class="pdf-opt-desc">A landscape, full-length timeline split into one-month pages,
+            with the chosen window highlighted.</div>
+          <!-- How far back / forward the month pages reach. Default: drop past
+               months, keep the current month onward through the last task. -->
+          <div id="pdf-global-range" class="pdf-range">
+            <div class="pdf-range-row">
+              <span class="pdf-range-label">Past</span>
+              <select id="pdf-global-past" class="pdf-select">
+                <option value="none" selected>Current month onward</option>
+                <option value="limit">Go back…</option>
+                <option value="all">Include all past</option>
+              </select>
+              <span id="pdf-global-past-extra" class="pdf-range-extra" hidden>
+                <input type="number" id="pdf-global-past-n" class="pdf-days" min="1" max="120" value="3"> months
+              </span>
+            </div>
+            <div class="pdf-range-row">
+              <span class="pdf-range-label">Future</span>
+              <select id="pdf-global-future" class="pdf-select">
+                <option value="all" selected>Through the last task</option>
+                <option value="limit">Next…</option>
+              </select>
+              <span id="pdf-global-future-extra" class="pdf-range-extra" hidden>
+                <input type="number" id="pdf-global-future-n" class="pdf-days" min="1" max="120" value="3"> months
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pdf-section-label">Paper size</div>
+      <div class="pdf-paper">
+        <label class="pdf-radio"><input type="radio" name="pdf-paper" value="Letter" checked> Letter</label>
+        <label class="pdf-radio"><input type="radio" name="pdf-paper" value="A4"> A4</label>
+      </div>
+
+      <div class="pdf-section-label">Save to</div>
+      <div class="pdf-folder">
+        <span id="pdf-folder-path" class="pdf-folder-path" title=""></span>
+        <button type="button" id="pdf-folder-btn">Choose…</button>
+      </div>
+
+      <div class="share-actions">
+        <span class="spacer"></span>
+        <button type="button" id="pdf-cancel">Cancel</button>
+        <button type="button" id="pdf-export" class="primary">Export PDF</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Task editor modal -->
   <div id="modal-backdrop" hidden>
     <div id="modal">
       <div id="modal-title">Edit task</div>
       <form id="task-form">
         <label>Name<input type="text" id="f-name" required></label>
-        <!-- Destination project (grouped by workspace). Shown only when adding a
-             task; hidden when editing (edits can't move a task between files). -->
+        <!-- Destination project (grouped by workspace). When adding a task it
+             chooses where the task is created; when editing, changing it moves
+             the task to that project. -->
         <label id="f-project-row">Project<select id="f-project"></select></label>
         <label>Team member<input type="text" id="f-assignee" list="assignee-list" placeholder="Unassigned"></label>
         <datalist id="assignee-list"></datalist>
@@ -379,8 +481,10 @@
   </div>
 
   <script src="vendor/mermaid.min.js"></script>
+  <script src="vendor/qrcode.js"></script>
   <script src="palette.js"></script>
   <script src="gantt-parse.js"></script>
+  <script src="pdf-export.js"></script>
   <script src="kanban.js"></script>
   <script src="gantt.js"></script>
   <script src="team.js"></script>

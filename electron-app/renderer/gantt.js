@@ -58,50 +58,13 @@
   // of its refs; a blank start follows the previous task; a date in the duration
   // slot is an explicit end. Each pass resolves whatever became answerable.
   function resolveSpan(model) {
-    const P = global.GanttParse;
     const DAY = 86400000;
+    // GanttParse.resolveSchedule replays Mermaid's scheduling to a fixpoint and
+    // is the single source of truth for task start/end timestamps (shared with
+    // the PDF export). We only add the aggregate min/max/day-count the chart
+    // sizing needs on top of its per-task maps.
+    const { startMs, endMs } = global.GanttParse.resolveSchedule(model);
     const tasks = model.tasks;
-    const startMs = new Map();
-    const endMs = new Map();
-
-    for (let pass = 0; pass <= tasks.length; pass++) {
-      let progressed = false;
-      for (let i = 0; i < tasks.length; i++) {
-        const t = tasks[i];
-        if (!startMs.has(t.id)) {
-          let s = null;
-          if (t.start && P.DATE_RE.test(t.start)) {
-            const v = Date.parse(t.start + 'T00:00:00');
-            if (!Number.isNaN(v)) s = v;
-          } else if (t.start && /^after\s+/i.test(t.start)) {
-            const ids = t.start.trim().split(/\s+/).slice(1);
-            let mx = -Infinity;
-            let ok = ids.length > 0;
-            for (const id of ids) {
-              if (endMs.has(id)) mx = Math.max(mx, endMs.get(id));
-              else ok = false;
-            }
-            if (ok && Number.isFinite(mx)) s = mx;
-          } else if (!t.start) {
-            const prev = tasks[i - 1];
-            if (prev && endMs.has(prev.id)) s = endMs.get(prev.id);
-          }
-          if (s != null) { startMs.set(t.id, s); progressed = true; }
-        }
-        if (startMs.has(t.id) && !endMs.has(t.id)) {
-          let e = null;
-          if (t.duration && P.DATE_RE.test(t.duration)) {
-            const v = Date.parse(t.duration + 'T00:00:00');
-            if (!Number.isNaN(v)) e = v;
-          } else {
-            const dur = t.milestone ? 0 : Math.max(0, P.parseDurationDays(t.duration));
-            e = startMs.get(t.id) + dur * DAY;
-          }
-          if (e != null) { endMs.set(t.id, e); progressed = true; }
-        }
-      }
-      if (!progressed) break;
-    }
 
     let min = Infinity;
     let max = -Infinity;
@@ -598,14 +561,22 @@
     const grid = svg.querySelector('.grid');
     let yTop = Infinity;
     let yBot = -Infinity;
+    const tickXs = [];           // rendered gridline x's (SVG units), to snap onto
     if (grid) {
       const tl = grid.transform.baseVal;
+      const gx = tl && tl.numberOfItems ? tl.getItem(0).matrix.e : 0;
       const ty = tl && tl.numberOfItems ? tl.getItem(0).matrix.f : 0;
-      grid.querySelectorAll('.tick line').forEach((ln) => {
+      // Each d3 tick is a <g transform="translate(x,0)"> wrapping the gridline, so
+      // the line's x lives in the group transform (the line's own x1/x2 are local).
+      grid.querySelectorAll('.tick').forEach((tick) => {
+        const ln = tick.querySelector('line');
+        if (!ln) return;
         let bb;
         try { bb = ln.getBBox(); } catch (_) { return; }
         yTop = Math.min(yTop, ty + bb.y);
         yBot = Math.max(yBot, ty + bb.y + bb.height);
+        const tt = tick.transform.baseVal;
+        if (tt && tt.numberOfItems) tickXs.push(gx + tt.getItem(0).matrix.e);
       });
     }
     if (!Number.isFinite(yTop) || !Number.isFinite(yBot) || yBot - yTop < 4) {
@@ -613,11 +584,26 @@
       yBot = baseH - AXIS_LINE_FROM_BOTTOM;
     }
 
+    // toX is a 2-point linear fit of d3's date scale, so a boundary can land a
+    // hair off the gridline d3 actually drew — the rule then reads as a faint
+    // double line beside the day line instead of thickening it. When a gridline
+    // sits right at the 1st (the daily and monthly regimes always have one) snap
+    // onto its exact x so the two overlap. The 8px tolerance is well under a
+    // day's width, so the weekly regime (Sunday ticks, usually no line on the
+    // 1st) keeps its calibrated x rather than jumping to a nearby Sunday.
+    const SNAP_PX = 8;
+
     const group = document.createElementNS(SVG_NS, 'g');
     group.setAttribute('class', 'gantt-month-bounds');
     for (const ms of months) {
-      const x = toX(ms);
-      if (!Number.isFinite(x)) continue;
+      const x0 = toX(ms);
+      if (!Number.isFinite(x0)) continue;
+      let x = x0;
+      let bestD = SNAP_PX;
+      for (const tx of tickXs) {
+        const d = Math.abs(tx - x0);
+        if (d <= bestD) { bestD = d; x = tx; }
+      }
       const line = document.createElementNS(SVG_NS, 'line');
       line.setAttribute('class', 'gantt-month-bound');
       line.setAttribute('x1', String(x));

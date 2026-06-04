@@ -12,18 +12,33 @@
 (function (global) {
   'use strict';
 
-  // Preset pastels, in the same gentle family as the rest of the chrome.
+  // Preset pastels, in the same gentle family as the rest of the chrome. Ordered
+  // by hue (warm reds → yellows → greens → teal → cyan → blue → violet → magenta
+  // → pink), so the 5-wide picker grid groups like colours together — each row is
+  // one temperature band. Where two pastels share a hue family they're spread
+  // apart in lightness/saturation (e.g. light blue vs deeper cornflower, light
+  // periwinkle vs deeper iris) so adjacent swatches never look identical.
   const PRESETS = [
-    { name: 'blush',      hex: '#fbc4ab' },
-    { name: 'peach',      hex: '#ffd6a5' },
-    { name: 'butter',     hex: '#fdffb6' },
-    { name: 'mint',       hex: '#caffbf' },
-    { name: 'sage',       hex: '#b5e8c9' },
-    { name: 'sky',        hex: '#9bf6ff' },
-    { name: 'blue',       hex: '#a0c4ff' },
-    { name: 'periwinkle', hex: '#bdb2ff' },
-    { name: 'lilac',      hex: '#d7bfff' },
-    { name: 'rose',       hex: '#ffc6ff' },
+    { name: 'salmon',     hex: '#ffb3a3' },
+    { name: 'blush',      hex: '#faceb7' },
+    { name: 'peach',      hex: '#ffd39e' },
+    { name: 'honey',      hex: '#ffe59e' },
+    { name: 'butter',     hex: '#ffffb8' },
+    { name: 'lime',       hex: '#d8f59e' },
+    { name: 'mint',       hex: '#ccfcc0' },
+    { name: 'sage',       hex: '#bbe7c8' },
+    { name: 'seafoam',    hex: '#a9efd8' },
+    { name: 'aqua',       hex: '#b6f1ed' },
+    { name: 'sky',        hex: '#adf1ff' },
+    { name: 'blue',       hex: '#add6ff' },
+    { name: 'cornflower', hex: '#91a8f3' },
+    { name: 'periwinkle', hex: '#bbb8ff' },
+    { name: 'iris',       hex: '#b39df1' },
+    { name: 'lilac',      hex: '#dcc2ff' },
+    { name: 'mauve',      hex: '#ddacf6' },
+    { name: 'orchid',     hex: '#f2bef9' },
+    { name: 'rose',       hex: '#ffc2f3' },
+    { name: 'petal',      hex: '#ffb8db' },
   ];
 
   // Current form: a Mermaid comment inside the gantt block.

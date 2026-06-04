@@ -22,6 +22,7 @@
     built: null,        // GlobalView.build(...) result while in global mode
     team: [],           // app-wide roster of assignee names (all projects)
     editingId: null,    // task id being edited, or null for a new task
+    editSourceFile: null, // file the task being edited lives in (move source)
     newStatus: 'todo',  // status for a brand-new task
     editModel: null,    // model that owns the task being edited
     editSave: null,     // async fn persisting that model back to disk
@@ -428,7 +429,7 @@
     openEditModal(info.origId, proj.model, async () => {
       const md = await window.projects.read(info.file);
       await window.projects.write(info.file, P.writeBackToMarkdown(md, proj.model));
-    });
+    }, info.file);
   }
 
   // Drag a card across status columns in the global Kanban: write back to the
@@ -521,8 +522,11 @@
   byId('task-form').addEventListener('submit', onSaveTask);
   window.DatePicker.attach(byId('f-start')); // app-themed calendar popup
   byId('f-start-mode').addEventListener('change', syncStartMode);
-  // Switching the destination project re-points the editor at it.
-  byId('f-project').addEventListener('change', (e) => applyTaskTarget(e.target.value));
+  // New task: re-point the editor at the chosen project. Editing: the dropdown is
+  // just a move destination, read at save time — don't repoint off the source.
+  byId('f-project').addEventListener('change', (e) => {
+    if (!state.editingId) applyTaskTarget(e.target.value);
+  });
   modal.addEventListener('mousedown', (e) => { if (e.target === modal) closeModal(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !modal.hidden) closeModal();
@@ -926,15 +930,20 @@
 
   // model/save default to the current single-project context; the global view
   // passes its source project's model + a file-specific writer instead.
-  function openEditModal(id, model, save) {
+  function openEditModal(id, model, save, file) {
     state.editModel = model || state.model;
     state.editSave = save || saveModel;
     const t = state.editModel.tasks.find((x) => x.id === id);
     if (!t) return;
     state.editingId = id;
+    state.editSourceFile = file || state.currentFile; // the file this task lives in
     byId('modal-title').textContent = 'Edit task';
     byId('f-delete').hidden = false;
-    byId('f-project-row').hidden = true; // editing can't move a task between files
+    // Show the destination picker (defaulting to the task's own project) so the
+    // task can be moved elsewhere. editModel/editSave stay pointed at the source;
+    // a changed selection triggers a cross-file move on save (see onSaveTask).
+    byId('f-project-row').hidden = false;
+    populateProjectSelect(state.editSourceFile);
     byId('f-save').disabled = false;
     populateAssigneeList();
     populateAfterList();
@@ -1041,34 +1050,43 @@
       return;
     }
     saveBtn.disabled = false;
-    if (state.mode === 'project' && file === state.currentFile && state.model) {
-      // The project already on screen — reuse its live model + writer.
-      state.editModel = state.model;
-      state.editSave = saveModel;
-    } else {
-      const g = state.global.find((p) => p.file === file);
-      if (g) {
-        // A project loaded in the global view — edit its model, write its file.
-        state.editModel = g.model;
-        state.editSave = async () => {
-          const md = await window.projects.read(file);
-          await window.projects.write(file, P.writeBackToMarkdown(md, g.model));
-        };
-      } else {
-        // A project not currently in memory — load it, then open it on save so
-        // the user lands on their new task.
-        const md = await window.projects.read(file);
-        const m = P.parseGantt(P.extractMermaidBlock(md).code);
-        state.editModel = m;
-        state.editSave = async () => {
-          const cur = await window.projects.read(file);
-          await window.projects.write(file, P.writeBackToMarkdown(cur, m));
-          await loadProjects(file);
-        };
-      }
-    }
+    const target = await resolveTarget(file, { navigate: true });
+    state.editModel = target.model;
+    state.editSave = target.save;
     populateAssigneeList();
     populateAfterList();
+  }
+
+  // Resolve a destination project file to the model to edit and a writer that
+  // persists it. Three cases: the project already on screen (reuse its live model
+  // + writer), one already loaded in the global view (edit its model, write its
+  // file), or one not in memory (parse it fresh). When `navigate` is set, a
+  // not-in-memory project is opened after the write so the user lands on it — used
+  // when adding a new task, but NOT when moving (the user stays put).
+  async function resolveTarget(file, { navigate = false } = {}) {
+    if (state.mode === 'project' && file === state.currentFile && state.model) {
+      return { model: state.model, save: saveModel };
+    }
+    const g = state.global.find((p) => p.file === file);
+    if (g) {
+      return {
+        model: g.model,
+        save: async () => {
+          const md = await window.projects.read(file);
+          await window.projects.write(file, P.writeBackToMarkdown(md, g.model));
+        },
+      };
+    }
+    const md = await window.projects.read(file);
+    const m = P.parseGantt(P.extractMermaidBlock(md).code);
+    return {
+      model: m,
+      save: async () => {
+        const cur = await window.projects.read(file);
+        await window.projects.write(file, P.writeBackToMarkdown(cur, m));
+        if (navigate) await loadProjects(file);
+      },
+    };
   }
 
   function showModal() {
@@ -1104,28 +1122,45 @@
     const start = readStartValue();
 
     const duration = milestone ? '0d' : `${durDays || 1}d`;
+    const status = byId('f-status').value;
+    const crit = byId('f-crit').checked;
 
     if (state.editingId) {
       const t = state.editModel.tasks.find((x) => x.id === state.editingId);
-      if (t) {
-        t.name = name;
-        t.assignee = assignee;
-        t.start = start;
-        t.duration = duration;
-        t.status = byId('f-status').value;
-        t.crit = byId('f-crit').checked;
-        t.milestone = milestone;
+      if (!t) { closeModal(); return; }
+      const dest = byId('f-project').value;
+      if (dest && dest !== state.editSourceFile) {
+        // Move to another project: drop the task from its source file, then add
+        // it to the destination file. We stay on the current view (the user's
+        // choice), so the task simply vanishes from here.
+        const i = state.editModel.tasks.indexOf(t);
+        if (i !== -1) state.editModel.tasks.splice(i, 1);
+        await state.editSave();
+
+        const target = await resolveTarget(dest);
+        // An "after <id>" start references a task in the old project that won't
+        // exist here — fall back to a concrete date so the new chart stays valid.
+        const movedStart = /^after\s+/i.test(start) ? P.todayISO() : start;
+        target.model.tasks.push({
+          name, assignee, id: freshId(target.model),
+          status, crit, milestone, start: movedStart, duration,
+        });
+        await target.save();
+        closeModal();
+        rerender();
+        return;
       }
+      // Edit in place.
+      t.name = name;
+      t.assignee = assignee;
+      t.start = start;
+      t.duration = duration;
+      t.status = status;
+      t.crit = crit;
+      t.milestone = milestone;
     } else {
       state.editModel.tasks.push({
-        name,
-        assignee,
-        id: nextId(),
-        status: byId('f-status').value,
-        crit: byId('f-crit').checked,
-        milestone,
-        start,
-        duration,
+        name, assignee, id: nextId(), status, crit, milestone, start, duration,
       });
     }
 
@@ -1149,13 +1184,15 @@
     else renderCurrentView();
   }
 
-  function nextId() {
-    const used = new Set(state.editModel.tasks.map((t) => t.id));
+  // Smallest unused tNN id within a given model's task list.
+  function freshId(model) {
+    const used = new Set(model.tasks.map((t) => t.id));
     let i = 1;
     let id;
     do { id = `t${i++}`; } while (used.has(id));
     return id;
   }
+  function nextId() { return freshId(state.editModel); }
 
   // ---- new project / workspaces ----------------------------------------
   // Create a project in a workspace. If `folder` is given (folder's "+" or its
@@ -1781,9 +1818,15 @@
           { label: 'Sharing — show link', onClick: openShareModal },
           { label: 'Copy share link', onClick: () => copyText(shareInfo.primaryUrl) },
           { separator: true },
+          { label: 'Export to PDF…', onClick: openPdfModal },
+          { separator: true },
           { label: 'Stop sharing', danger: true, onClick: stopShare },
         ]
-      : [{ label: 'Share meeting', onClick: openShareModal }];
+      : [
+          { label: 'Start meeting', onClick: openShareModal },
+          { separator: true },
+          { label: 'Export to PDF…', onClick: openPdfModal },
+        ];
     // Drop the menu straight down from the button's top-left corner (same
     // top-left anchoring the new-project workspace picker uses).
     showContextMenu(r.left, r.bottom + 4, items);
@@ -1958,8 +2001,64 @@
         alt.appendChild(d);
       }
     }
+
+    // QR of the link (scan to open) + the PIN guests must type to get in.
+    renderShareQr(shareInfo.primaryUrl);
+    byId('share-pin').textContent = shareInfo.pin ? formatPin(shareInfo.pin) : '';
+    byId('share-pin').closest('.share-join').hidden = !shareInfo.pin;
+
     byId('share-scope-note').textContent =
-      `Sharing “${shareInfo.title}”. It updates live as you work — anyone on ${wifiPhrase()} with this link can view it (read-only) until you stop.`;
+      `Sharing “${shareInfo.title}”. It updates live as you work — anyone on ${wifiPhrase()} ` +
+      `with this link and the PIN can view it (read-only) until you stop.`;
+  }
+
+  // Spaced for readability on screen (e.g. "12 34"); the value typed is "1234".
+  function formatPin(pin) {
+    const s = String(pin);
+    return s.length === 4 ? `${s.slice(0, 2)} ${s.slice(2)}` : s;
+  }
+
+  // Draw the meeting link as a QR into #share-qr — an inline SVG (one <path> for
+  // all dark modules) so it stays crisp at any size and needs no <img>/data: URL.
+  // window.QRCode (vendored node-qrcode core) builds the module matrix; we paint.
+  function renderShareQr(url) {
+    const box = byId('share-qr');
+    const wrap = box.closest('.share-qr-wrap');
+    box.innerHTML = '';
+    if (!url || !window.QRCode) { wrap.hidden = true; return; }
+    let qr;
+    try { qr = window.QRCode.create(url, { errorCorrectionLevel: 'M' }); }
+    catch { wrap.hidden = true; return; }
+    wrap.hidden = false;
+
+    const n = qr.modules.size;
+    const quiet = 4;                 // standard QR quiet zone (modules)
+    const dim = n + quiet * 2;
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${dim} ${dim}`);
+    svg.setAttribute('width', '168');
+    svg.setAttribute('height', '168');
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.setAttribute('role', 'img');
+
+    const bg = document.createElementNS(NS, 'rect');
+    bg.setAttribute('width', String(dim));
+    bg.setAttribute('height', String(dim));
+    bg.setAttribute('fill', '#ffffff');
+    svg.appendChild(bg);
+
+    let d = '';
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        if (qr.modules.get(r, c)) d += `M${c + quiet} ${r + quiet}h1v1h-1z`;
+      }
+    }
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', '#16181d');
+    svg.appendChild(path);
+    box.appendChild(svg);
   }
 
   async function stopShare() {
@@ -2019,12 +2118,214 @@
     if (s && s.active) { shareInfo = Object.assign({}, s); setExportSharing(true); }
   }).catch(() => {});
 
+  // ---- export to PDF ----------------------------------------------------
+  // Builds a print-ready HTML document (window.PdfExport) and hands it to the
+  // main process to render + save (window.pdfExport.save). The dialog picks the
+  // scope (one project, or all profile projects) that feeds the Forecast + Team
+  // pages, plus an independent project set for the Global timeline.
+  let pdfDir = localStorage.getItem('pdfExportDir') || null; // chosen output folder, else Documents
+  let appVersion = ''; // Projector version, for the PDF footer attribution
+
+  // Show the chosen export folder (or the Documents default) in the dialog.
+  function renderPdfFolder() {
+    const el = byId('pdf-folder-path');
+    el.classList.toggle('is-default', !pdfDir);
+    el.textContent = pdfDir || 'Documents (default)';
+    el.title = pdfDir || 'Documents (default)';
+  }
+
+  function openPdfModal() {
+    buildPdfProjects();
+    byId('pdf-forecast-on').checked = true;
+    byId('pdf-team-on').checked = true;
+    byId('pdf-global-on').checked = true;
+    byId('pdf-forecast-days').value = '7';
+    byId('pdf-team-days').value = '7';
+    byId('pdf-global-past').value = 'none';
+    byId('pdf-global-future').value = 'all';
+    byId('pdf-global-past-n').value = '3';
+    byId('pdf-global-future-n').value = '3';
+    const letter = document.querySelector('input[name="pdf-paper"][value="Letter"]');
+    if (letter) letter.checked = true;
+    syncPdfDays();
+    syncPdfGlobal();
+    syncPdfGlobalRange();
+    renderPdfFolder();
+    syncPdfExport();
+    byId('pdf-backdrop').hidden = false;
+  }
+  function closePdfModal() { byId('pdf-backdrop').hidden = true; }
+
+  // One project checklist that feeds every page (Forecast, Team, Global). The
+  // default check state preselects the open project when the dialog is launched
+  // from a single project; otherwise every project starts checked. Reuses the
+  // .pdf-check row chrome + the .so-dot colour swatch.
+  function buildPdfProjects() {
+    const box = byId('pdf-projects');
+    box.innerHTML = '';
+    const all = state.projects.filter(inActiveProfile);
+    if (!all.length) {
+      box.innerHTML = '<div class="pdf-empty">No projects in this profile.</div>';
+      return;
+    }
+    const only = (state.mode === 'project' && state.currentFile
+      && all.some((p) => p.file === state.currentFile)) ? state.currentFile : null;
+    for (const p of all) {
+      const row = document.createElement('label');
+      row.className = 'pdf-check';
+      row.innerHTML = `<input type="checkbox"><span class="so-dot" style="background:${window.Palette.colorFor(p)}"></span><span class="pdf-check-label"></span>`;
+      row.querySelector('.pdf-check-label').textContent = p.title;
+      const inp = row.querySelector('input');
+      inp.dataset.file = p.file;
+      inp.checked = only ? (p.file === only) : true;
+      box.appendChild(row);
+    }
+  }
+
+  // Team shares the forecast's window when both are on; otherwise it gets its
+  // own days input.
+  function syncPdfDays() {
+    const fOn = byId('pdf-forecast-on').checked;
+    byId('pdf-team-days-wrap').hidden = fOn;
+    byId('pdf-team-shared').hidden = !fOn;
+  }
+  // Only the Global page's Past/Future range controls toggle with its checkbox;
+  // the project checklist is shared by every page and always stays enabled.
+  function syncPdfGlobal() {
+    const on = byId('pdf-global-on').checked;
+    const range = byId('pdf-global-range');
+    range.classList.toggle('disabled', !on);
+    range.querySelectorAll('select, input').forEach((el) => { el.disabled = !on; });
+  }
+  // Reveal each month-count input only when its select is in "limit" mode.
+  function syncPdfGlobalRange() {
+    byId('pdf-global-past-extra').hidden = byId('pdf-global-past').value !== 'limit';
+    byId('pdf-global-future-extra').hidden = byId('pdf-global-future').value !== 'limit';
+  }
+  function syncPdfExport() {
+    const anyPage = byId('pdf-forecast-on').checked || byId('pdf-team-on').checked || byId('pdf-global-on').checked;
+    const anyProject = !!byId('pdf-projects').querySelector('input:checked');
+    byId('pdf-export').disabled = !(anyPage && anyProject);
+  }
+  function clampDays(v) {
+    const x = parseInt(v, 10);
+    return Number.isFinite(x) ? Math.min(120, Math.max(1, x)) : 7;
+  }
+  function clampMonths(v) {
+    const x = parseInt(v, 10);
+    return Number.isFinite(x) ? Math.min(120, Math.max(1, x)) : 3;
+  }
+
+  // Read + parse each file into the { file, title, color, model } shape the PDF
+  // builder (and the Global view) expect — same load path as enterGlobal().
+  async function loadModelsFor(files) {
+    const metaByFile = new Map(state.projects.map((p) => [p.file, p]));
+    const out = [];
+    for (const file of files) {
+      const md = await window.projects.read(file);
+      const model = P.parseGantt(P.extractMermaidBlock(md).code);
+      const meta = metaByFile.get(file) || { title: model.title || file };
+      out.push({
+        file,
+        title: meta.title || model.title || 'Project',
+        color: window.Palette.colorFor({ color: window.Palette.readColor(md), title: meta.title, file }),
+        model,
+      });
+    }
+    return out;
+  }
+
+  async function doPdfExport() {
+    const all = state.projects.filter(inActiveProfile);
+    const files = [...byId('pdf-projects').querySelectorAll('input:checked')].map((i) => i.dataset.file);
+    if (!files.length) return;
+    const forecast = { on: byId('pdf-forecast-on').checked, days: clampDays(byId('pdf-forecast-days').value) };
+    const teamOn = byId('pdf-team-on').checked;
+    const teamDays = forecast.on ? forecast.days : clampDays(byId('pdf-team-days').value);
+    const team = { on: teamOn, days: teamDays };
+    const globalOn = byId('pdf-global-on').checked;
+    if (!forecast.on && !team.on && !globalOn) return;
+
+    const pageSize = (document.querySelector('input[name="pdf-paper"]:checked') || {}).value || 'Letter';
+    const windowDays = forecast.on ? forecast.days : (team.on ? team.days : 7);
+    // One checklist drives every page. A single project bands the Forecast by
+    // assignee (like a project view); several band it by project.
+    const scopeKind = files.length === 1 ? 'project' : 'all';
+    const titleByFile = new Map(state.projects.map((p) => [p.file, p.title]));
+    let scopeTitle;
+    if (files.length === 1) scopeTitle = titleByFile.get(files[0]) || 'Project';
+    else if (files.length === all.length) scopeTitle = state.activeProfile ? `All ${state.activeProfile} projects` : 'All projects';
+    else scopeTitle = `${files.length} projects`;
+    const globalPast = { mode: byId('pdf-global-past').value, months: clampMonths(byId('pdf-global-past-n').value) };
+    const globalFuture = { mode: byId('pdf-global-future').value, months: clampMonths(byId('pdf-global-future-n').value) };
+
+    const btn = byId('pdf-export');
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Exporting…';
+    try {
+      const models = await loadModelsFor(files);
+      const byFile = new Map(models.map((m) => [m.file, m]));
+      const scopeProjects = files.map((f) => byFile.get(f)).filter(Boolean);
+
+      const html = window.PdfExport.buildDocument({
+        scopeKind,
+        scopeTitle,
+        scopeProjects,
+        forecast,
+        team,
+        windowDays,
+        global: { on: globalOn, projects: scopeProjects, past: globalPast, future: globalFuture },
+        pageSize,
+        profileName: state.activeProfile || '',
+        todayISO: P.todayISO(),
+        appVersion,
+      });
+      const safe = scopeTitle.replace(/[\\/:*?"<>|]+/g, ' ').trim();
+      const defaultName = `Projector — ${safe} — ${P.todayISO()}.pdf`;
+      const res = await window.pdfExport.save({ html, fileName: defaultName, dir: pdfDir || undefined });
+      if (res && res.error) window.alert('Could not export PDF: ' + res.error);
+      else if (res && res.path) closePdfModal();
+      // canceled -> leave the dialog open
+    } catch (err) {
+      window.alert('Could not export PDF: ' + ((err && err.message) || err));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+      syncPdfExport();
+    }
+  }
+
+  byId('pdf-forecast-on').addEventListener('change', () => { syncPdfDays(); syncPdfExport(); });
+  byId('pdf-team-on').addEventListener('change', syncPdfExport);
+  byId('pdf-global-on').addEventListener('change', () => { syncPdfGlobal(); syncPdfExport(); });
+  byId('pdf-projects').addEventListener('change', syncPdfExport);
+  byId('pdf-global-past').addEventListener('change', syncPdfGlobalRange);
+  byId('pdf-global-future').addEventListener('change', syncPdfGlobalRange);
+  byId('pdf-folder-btn').addEventListener('click', async () => {
+    const res = await window.pdfExport.chooseFolder(pdfDir || undefined);
+    if (res && res.dir) {
+      pdfDir = res.dir;
+      try { localStorage.setItem('pdfExportDir', pdfDir); } catch { /* storage blocked — keep the in-memory choice */ }
+      renderPdfFolder();
+    }
+  });
+  byId('pdf-cancel').addEventListener('click', closePdfModal);
+  byId('pdf-export').addEventListener('click', doPdfExport);
+  byId('pdf-backdrop').addEventListener('mousedown', (e) => {
+    if (e.target === byId('pdf-backdrop')) closePdfModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !byId('pdf-backdrop').hidden) closePdfModal();
+  });
+
   // ---- helpers ----------------------------------------------------------
   function byId(id) { return document.getElementById(id); }
 
   // ---- boot -------------------------------------------------------------
   // Show the app version in the Settings header (best-effort; non-fatal).
   window.appInfo?.getVersion().then((v) => {
+    appVersion = v || '';
     const el = byId('settings-app-version');
     if (el && v) el.textContent = 'v' + v;
   }).catch(() => {});

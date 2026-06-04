@@ -1,14 +1,13 @@
-# Projector — Mac export & release brief
+# Projector — Mac/Windows export & release brief
 
 **Read this if you are Claude Code (or me) running on the Mac.** The Linux side is
-done: the `.rpm` is already built. Your job here is to produce the **`.dmg`**
-(macOS), **`.exe`** (Windows), and **`.deb`** (Debian/Ubuntu) installers, then
-publish **all four** to GitHub as a **pre-release**.
+already done: the `v<version>` GitHub release exists with the `.rpm` and `.deb`
+attached. Your job here is to build the **`.dmg`** (macOS) and **`.exe`** (Windows)
+installers and **upload them to that same existing release**.
 
-This app is a local-first, Markdown + Mermaid-gantt project planner. The release
-is for self-hosting / local-org folks who want to run and even manage a small
-**team** off plain `.md` files on their own disk — no cloud, no subscription. The
-release notes at the bottom say exactly that.
+This app is a local-first, Markdown + Mermaid-gantt project planner for self-hosting /
+local-org folks who want to run a small **team** off plain `.md` files on their own
+disk — no cloud, no subscription.
 
 ---
 
@@ -18,15 +17,15 @@ release notes at the bottom say exactly that.
 |---|---|
 | Project root | the synced `…/projector-app` folder (contains `electron-app/`, `res/`) |
 | App project dir | `projector-app/electron-app` (run all `npm`/`electron-builder` here) |
-| Version | read it, don't hardcode: `node -p "require('./package.json').version"` (currently `1.2.0`) |
+| Version | read it, don't hardcode: `node -p "require('./package.json').version"` |
 | GitHub account | **`lhdharris`** (verify with `gh auth status`) |
-| Target repo | **`lhdharris/projector`** — does **not exist yet**, you will create it |
+| Target repo | **`lhdharris/projector`** — already exists; default branch is **`main`** |
+| Release | the **full** release `v<version>` already exists (Linux `.rpm`/`.deb` attached) |
 | Output dir | `electron-app/dist/` |
 
-> ⚠️ The `package.json` `homepage` was pointed at a non-existent `louisharris/projector`;
-> I changed it to `lhdharris/projector` to match the authenticated account. If you
-> actually intend a different owner/repo, change `REPO` in step 4 **and** the
-> `homepage` field, and keep them in sync.
+> The repo and the `v<version>` release are already created from the Linux machine.
+> Do **not** create the repo or the release — just build the Mac/Windows installers
+> and `gh release upload` them onto the existing release.
 
 ---
 
@@ -37,28 +36,26 @@ release notes at the bottom say exactly that.
 brew install node gh
 gh auth status   # must show you logged in as lhdharris; if not: gh auth login
 
-# Needed to build the .deb on macOS (electron-builder shells out to these):
-brew install dpkg fakeroot
-
-# Needed to build the Windows .exe on macOS (this is the fragile one — see §3c):
+# Needed to build the Windows .exe on macOS (this is the fragile one — see §3b):
 brew install --cask wine-stable
 ```
 
 ## 2. Get a clean, platform-correct checkout
 
 `node_modules` from the Linux machine is **not** reusable — native modules are
-per-platform. Reinstall:
+per-platform. Pull the latest `main` and reinstall:
 
 ```bash
-cd "<…>/projector-app/electron-app"
+cd "<…>/projector-app"
+git checkout main && git pull
+cd electron-app
 rm -rf node_modules
 npm install
 ```
 
 ## 3. Build the installers
 
-Unsigned builds are fine for a pre-release; disable signing so macOS doesn't try
-to find a certificate:
+Unsigned builds are fine; disable signing so macOS doesn't try to find a certificate:
 
 ```bash
 export CSC_IDENTITY_AUTO_DISCOVERY=false
@@ -69,91 +66,44 @@ export CSC_IDENTITY_AUTO_DISCOVERY=false
 npm run dist:mac
 ```
 Produces `dist/Projector-<version>.dmg` (Apple Silicon adds `-arm64`; Intel adds
-`-x64`). This is the host architecture only — that's expected.
+`-x64`). Host architecture only — that's expected.
 
-### b. Debian/Ubuntu `.deb`
-```bash
-npm run dist:deb
-```
-Produces `dist/projector-app_<version>_amd64.deb`. Needs `dpkg` + `fakeroot` from §1.
-
-### c. Windows `.exe` (needs Wine — the flaky step)
+### b. Windows `.exe` (needs Wine — the flaky step)
 ```bash
 npm run dist:win
 ```
 Produces `dist/Projector Setup <version>.exe` (NSIS, user-level installer).
 **If this fails** (common on Apple Silicon — Wine/Rosetta issues): don't fight it.
-Either skip `.exe` for now and add it later, or build it on a real Windows box /
-in GitHub Actions (`windows-latest` runner running `npm run dist:win`), then
-`gh release upload v<version> "Projector Setup <version>.exe"`.
+Skip `.exe` for now and add it later, or build it on a real Windows box / in GitHub
+Actions (`windows-latest` runner running `npm run dist:win`).
 
-*(Shortcut: `npm run dist:all-on-mac` runs all three at once — but if Wine breaks
-it aborts the batch, so the one-by-one order above is safer.)*
+## 4. Upload the Mac/Windows installers to the existing release
 
-## 4. Bring the Linux `.rpm` alongside the rest
-
-The `.rpm` was built on the Linux machine at
-`electron-app/dist/projector-app-<version>.x86_64.rpm`.
-
-- If your Sync folder propagates `dist/`, it's **already there** — nothing to do.
-- If not, copy it from the Linux box into `electron-app/dist/`, or add it to the
-  release afterward with `gh release upload v<version> <path-to>.rpm`.
-
-> `dist/` also contains older `1.1.0` / `1.1.1` rpms. The upload command in §5
-> globs **by current version**, so those are ignored automatically.
-
-## 5. Publish to GitHub as a pre-release
-
-Run from the **project root** (the `projector-app` folder, not `electron-app`):
+Run from the **project root**:
 
 ```bash
 cd "<…>/projector-app"
 REPO="lhdharris/projector"
 VERSION="$(node -p "require('./electron-app/package.json').version")"
 
-# --- one-time: turn this into a git repo and create it on GitHub ---
-if [ ! -d .git ]; then
-  git init -b main
-  git add -A
-  git commit -m "Projector v$VERSION"
-fi
-if ! gh repo view "$REPO" >/dev/null 2>&1; then
-  gh repo create "$REPO" --public --source=. --remote=origin --push
-else
-  git push -u origin main
-fi
-
-# --- gather only this version's installers (handles the space in the .exe name) ---
 cd electron-app
 shopt -s nullglob
 assets=()
-for f in dist/*"$VERSION"*.dmg dist/*"$VERSION"*.exe dist/*"$VERSION"*.deb dist/*"$VERSION"*.rpm; do
-  assets+=("$f")
-done
+for f in dist/*"$VERSION"*.dmg dist/*"$VERSION"*.exe; do assets+=("$f"); done
 printf 'Will upload:\n'; printf '  %s\n' "${assets[@]}"
 
-# --- create the pre-release ---
-gh release create "v$VERSION" "${assets[@]}" \
-  --repo "$REPO" \
-  --title "Projector v$VERSION" \
-  --prerelease \
-  --notes-file ../RELEASE_NOTES.md
+# add them to the release the Linux machine already published (--clobber re-uploads
+# if you're replacing a file)
+gh release upload "v$VERSION" "${assets[@]}" --repo "$REPO" --clobber
 ```
 
-If the tag `v<version>` already exists, either bump `version` in
-`electron-app/package.json` and rebuild, or delete the old release/tag first
-(`gh release delete v<version> --cleanup-tag`).
-
-The release notes file `RELEASE_NOTES.md` sits next to this file in the project
-root — edit it before publishing if you want.
-
-## 6. Sanity check
+## 5. Sanity check
 
 ```bash
 gh release view "v$VERSION" --repo "$REPO"
 ```
-Confirm it's flagged **Pre-release** and lists `.dmg`, `.exe` (if built), `.deb`,
-and `.rpm`.
+Confirm it is **not** flagged Pre-release and lists `.rpm`, `.deb`, `.dmg`, and
+`.exe` (if built).
 
 ---
 
@@ -161,11 +111,11 @@ and `.rpm`.
 
 These installers are **not code-signed**, so:
 
-- **macOS** will say the app "can't be opened" / is from an unidentified
-  developer. Users right-click the app → **Open**, or run
+- **macOS** will say the app "can't be opened" / is from an unidentified developer.
+  Users right-click the app → **Open**, or run
   `xattr -dr com.apple.quarantine /Applications/Projector.app`.
 - **Windows** SmartScreen shows "Windows protected your PC" → **More info → Run anyway**.
 - **Linux** `.rpm`/`.deb` install normally (`sudo rpm -i …` / `sudo dpkg -i …`).
 
-Signing is a later upgrade (Apple Developer ID + notarization; a Windows
-Authenticode cert). Not needed to ship a pre-release.
+Signing is a later upgrade (Apple Developer ID + notarization; a Windows Authenticode
+cert).

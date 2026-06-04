@@ -15,7 +15,114 @@
        served page (never the app) and only narrow screens (a laptop opening the
        link keeps the full-size view). -->
   <style>
-    @media (max-width: 640px) { html { zoom: 0.864; } }
+    @media (max-width: 640px) {
+      html { zoom: 0.864; }
+      /* Tighten the attribution bar and drop the "available for free at" lead-in
+         so the version + link still fit on a narrow phone screen. */
+      #share-footer { height: 24px; line-height: 24px; font-size: 10px; }
+      .share-footer-lead { display: none; }
+      /* Ride the first wrapped toolbar row, next to the "Live view" badge. */
+      #invite-btn, #pdf-btn { order: 1; margin-left: 8px; }
+    }
+
+    /* PIN gate: shown until the guest enters the host's 4-digit meeting PIN.
+       Self-contained styles (this page is served alone) under the inline-style
+       CSP allowance. */
+    #pin-gate {
+      position: fixed; inset: 0; z-index: 1000;
+      display: flex; align-items: center; justify-content: center;
+      background: #eef1f3;
+      padding: 20px;
+    }
+    #pin-gate[hidden] { display: none; }
+    #pin-gate .pin-card {
+      width: 320px; max-width: 100%;
+      background: #fff; border: 1px solid #e2e2e2; border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.10);
+      padding: 26px 24px; text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #pin-gate .pin-title { font-size: 17px; font-weight: 600; color: #2a2a2a; }
+    #pin-gate .pin-sub { margin-top: 8px; font-size: 13px; color: #777; line-height: 1.45; }
+    #pin-gate form { margin-top: 18px; display: flex; gap: 8px; }
+    #pin-gate .pin-input {
+      flex: 1 1 auto; min-width: 0;
+      padding: 12px 14px;
+      border: 1px solid #cfcfcf; border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 24px; font-weight: 700; letter-spacing: .35em; text-align: center;
+      color: #1a5b7a;
+    }
+    #pin-gate .pin-input:focus { outline: none; border-color: #3f9fe0; box-shadow: 0 0 0 3px rgba(63,159,224,.18); }
+    #pin-gate .pin-submit {
+      flex: 0 0 auto; padding: 0 18px; border-radius: 8px;
+      border: 1px solid #3f9fe0; background: #3f9fe0; color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    #pin-gate .pin-submit:hover { background: #2e8fd2; border-color: #2e8fd2; }
+    #pin-gate .pin-error { margin-top: 12px; font-size: 12.5px; color: #b3261e; min-height: 1em; }
+    #pin-gate .pin-error[hidden] { display: none; }
+
+    /* Subtle attribution bar pinned at the very bottom of the shared view. */
+    #share-footer {
+      flex: 0 0 auto;
+      height: 26px; line-height: 26px; padding: 0 12px;
+      border-top: 1px solid #ececec; background: #fafafa;
+      color: #9aa0a6; font-size: 11px; text-align: center;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #share-footer a { color: #7a8590; text-decoration: none; }
+    #share-footer a:hover { color: #4a5560; text-decoration: underline; }
+    .share-footer-sep { margin: 0 6px; color: #c8ced2; }
+
+    /* "Invite" lives in the top bar, to the right of the "Live view" badge: it
+       opens a small card with the join QR / address / PIN so a guest already in
+       the meeting can help a latecomer join from their own phone without
+       bothering the host. The card's inner rows reuse app.css's .share-join /
+       .share-qr* / .share-pin* / .share-actions / .share-wifi-note classes. */
+    #invite-btn, #pdf-btn {
+      flex: 0 0 auto;
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-left: 10px;
+      padding: 6px 12px; border-radius: 7px;
+      border: 1px solid #cdd5da; background: #fff;
+      color: #4a5560; font-size: 13px; font-weight: 600; cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      transition: background .15s, border-color .15s;
+    }
+    #invite-btn:hover, #pdf-btn:hover { background: #f3f6f8; border-color: #b9c3c9; }
+    #invite-btn[hidden], #pdf-btn[hidden] { display: none; }
+    #invite-btn svg, #pdf-btn svg { display: block; }
+    #pdf-btn:disabled { opacity: .6; cursor: default; background: #fff; border-color: #cdd5da; }
+
+    #invite-backdrop {
+      position: fixed; inset: 0; z-index: 900;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(20,24,29,.42); padding: 20px;
+    }
+    #invite-backdrop[hidden] { display: none; }
+    #invite-card {
+      position: relative;
+      width: 380px; max-width: 100%;
+      background: #fff; border: 1px solid #e2e2e2; border-radius: 12px;
+      box-shadow: 0 10px 36px rgba(0,0,0,.18);
+      padding: 22px 22px 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #invite-card .invite-title { font-size: 16px; font-weight: 600; color: #2a2a2a; }
+    #invite-card .invite-sub { margin-top: 6px; font-size: 13px; color: #777; line-height: 1.45; }
+    #invite-wifi { margin-top: 14px; }   /* clear the sub-line above the same-Wi-Fi callout */
+    #invite-card .invite-url-row { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; }
+    #invite-card .invite-url-label {
+      font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8a8a8a;
+    }
+    #invite-card .invite-close {
+      position: absolute; top: 10px; right: 12px;
+      border: none; background: none; cursor: pointer;
+      font-size: 22px; line-height: 1; color: #aab1b8; padding: 4px;
+    }
+    #invite-card .invite-close:hover { color: #6a7178; }
   </style>
 </head>
 <body class="share-view no-hover">
@@ -23,6 +130,7 @@
     <!-- Top bar: shared title + the same Task List / Timeline / Team toggle. -->
     <div id="toolbar">
       <div id="share-title" class="share-title"></div>
+      <div class="share-badge"><span class="share-dot"></span>Live view</div>
 
       <div id="view-toggle" hidden>
         <button class="seg-btn active" data-view="kanban">
@@ -53,7 +161,30 @@
       </div>
 
       <div id="drag-space"></div>
-      <div class="share-badge"><span class="share-dot"></span>Live view</div>
+      <!-- "Invite" — opens a card so a guest can help a latecomer join (QR /
+           address / PIN). Hidden until past the PIN gate; filled by viewer.js. -->
+      <button id="invite-btn" type="button" hidden aria-label="Invite someone to this meeting">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
+          <path d="M14 14h3v3M21 14v.01M21 17v4h-4M17 21h-3"/>
+        </svg>
+        Invite
+      </button>
+      <!-- "Download PDF" — the host renders the shared view (the content the host
+           chose to share) to a PDF and streams it back. Hidden until past the PIN
+           gate; toggled alongside the Invite button by viewer.js. -->
+      <button id="pdf-btn" type="button" hidden aria-label="Download this view as a PDF">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v12"/>
+          <path d="M7 10l5 5 5-5"/>
+          <path d="M5 21h14"/>
+        </svg>
+        <span class="pdf-btn-label">Download PDF</span>
+      </button>
     </div>
 
     <!-- Main view area (no sidebar) -->
@@ -94,10 +225,70 @@
         </div>
       </div>
     </main>
+
+    <!-- Subtle attribution along the bottom of the shared view. The version is
+         filled in by viewer.js from /data; the link opens the project on GitHub. -->
+    <div id="share-footer">
+      Created with Projector <span id="footer-version"></span><span class="share-footer-sep">·</span><span class="share-footer-lead">available for free at </span><a href="https://github.com/lhdharris/projector" target="_blank" rel="noopener noreferrer">github.com/lhdharris/projector</a>
+    </div>
+  </div>
+
+  <!-- PIN gate: covers everything until the guest enters the meeting PIN. -->
+  <div id="pin-gate" hidden>
+    <div class="pin-card">
+      <div class="pin-title">Enter the meeting PIN</div>
+      <div class="pin-sub">Ask the host for the 4-digit PIN shown on their screen.</div>
+      <form id="pin-form">
+        <input id="pin-input" class="pin-input" inputmode="numeric" pattern="[0-9]*"
+               maxlength="4" autocomplete="off" aria-label="4-digit meeting PIN">
+        <button type="submit" class="pin-submit">Join</button>
+      </form>
+      <div id="pin-error" class="pin-error" hidden></div>
+    </div>
+  </div>
+
+  <div id="invite-backdrop" hidden>
+    <div id="invite-card" role="dialog" aria-modal="true" aria-label="Invite someone to this meeting">
+      <button id="invite-close" type="button" class="invite-close" aria-label="Close">&times;</button>
+      <div class="invite-title">Invite someone to this meeting</div>
+      <div class="invite-sub">Have them scan this on their phone, or open the address and enter the PIN.</div>
+      <!-- Explicit same-Wi-Fi requirement, naming the host's network (filled by
+           viewer.js). Reuses app.css's .share-wifi-note callout. -->
+      <div id="invite-wifi" class="share-wifi-note">
+        <svg class="share-wifi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2.5 8.5a15 15 0 0 1 19 0"/>
+          <path d="M5.5 12a10.5 10.5 0 0 1 13 0"/>
+          <path d="M8.5 15.5a6 6 0 0 1 7 0"/>
+          <circle cx="12" cy="19" r="0.6" fill="currentColor" stroke="none"/>
+        </svg>
+        <span class="share-wifi-text"></span>
+      </div>
+      <div class="share-join">
+        <div class="share-qr-wrap">
+          <div id="invite-qr" class="share-qr" aria-label="QR code to join the meeting"></div>
+          <div class="share-qr-cap">Scan to join</div>
+        </div>
+        <div class="share-pin-block">
+          <div class="share-pin-label">Meeting PIN</div>
+          <div id="invite-pin" class="share-pin"></div>
+          <div class="share-pin-hint">Enter this PIN to view</div>
+        </div>
+      </div>
+      <div class="invite-url-row">
+        <span class="invite-url-label">Address</span>
+        <code id="invite-url" class="share-url"></code>
+      </div>
+      <div class="share-actions">
+        <span class="spacer"></span>
+        <button type="button" id="invite-done" class="primary">Done</button>
+      </div>
+    </div>
   </div>
 
   <!-- The exact same view-modules the app uses, served read-only. -->
   <script src="/lib/mermaid.min.js"></script>
+  <script src="/lib/qrcode.js"></script>
   <script src="/lib/palette.js"></script>
   <script src="/lib/gantt-parse.js"></script>
   <script src="/lib/kanban.js"></script>

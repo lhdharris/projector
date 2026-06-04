@@ -103,10 +103,10 @@ html, body {
   border-radius: 6px;
   cursor: pointer;
   padding: 0;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
 }
 .swatch:hover { transform: scale(1.08); }
-.swatch.selected { border-color: #1a5b7a; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 0 0 2px rgba(137, 207, 240, 0.4); }
+.swatch.selected { border-color: #1a5b7a; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px rgba(137, 207, 240, 0.4); }
 
 /* window controls */
 #wm-buttons { display: flex; align-items: center; gap: 2px; }
@@ -350,7 +350,7 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
   color: #aaa;
 }
 .ctx-sep { height: 1px; margin: 5px 6px; background: #ececec; }
-.ctx-swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 4px 10px 8px; }
+.ctx-swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 9px; padding: 4px 10px 8px; }
 
 /* Global view sidebar entry */
 #global-view-btn {
@@ -440,6 +440,9 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 .team-col .card { position: relative; }
 .team-col .card.done { opacity: 0.5; }
 .team-col .card.done:hover { opacity: 0.8; }
+/* In-progress cards stand out from To Do at a glance: a fuller (less faded)
+   background from Palette.shade, plus a thicker border. */
+.team-col .card.active { border-width: 2px; }
 /* Pending status change: fade + shrink briefly before the card reshuffles. */
 .team-col .card.status-moving {
   opacity: 0.35;
@@ -456,7 +459,9 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
   transition: filter 0.12s;
 }
 .card-status-tag::after { content: ' ▾'; opacity: 0.55; font-size: 10px; }
-.card-status-tag:hover { filter: brightness(0.95); }
+/* filter (not background) so it darkens both the grey pills and the inline-tinted
+   In Progress pill, whose inline background a class rule couldn't override. */
+.card-status-tag:hover { filter: brightness(0.94); }
 
 /* Column "⋮" menu button in the team-column header. */
 .col-menu-btn {
@@ -660,8 +665,8 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
   padding: 1px 8px;
 }
 .kanban-list { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-height: 8px; }
-/* Room so the in-progress neon ring (a 2px box-shadow) isn't clipped by the
-   column's scroll overflow. */
+/* A little breathing room so cards (and the in-progress card's thicker border)
+   aren't clipped against the column's scroll overflow. */
 .team-col .kanban-list { padding: 3px; }
 
 .card {
@@ -1211,23 +1216,28 @@ label.chk input { width: auto; }
 #share-backdrop[hidden] { display: none; }
 #share-modal {
   width: 400px;
-  max-width: calc(100vw - 40px);
+  /* Same backdrop-relative bound as #pdf-modal: keeps the modal (incl. the tall
+     firewall-warning step) within the window under the root zoom, scrolling
+     internally rather than spilling its edges off-screen. */
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
   background: #fff;
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
-  padding: 20px;
+  padding: 24px 26px;
 }
-#share-modal-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 12px; }
-.share-hint { font-size: 13px; color: #777; line-height: 1.45; margin-bottom: 12px; }
+#share-modal-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 16px; }
+.share-hint { font-size: 13px; color: #777; line-height: 1.5; margin-bottom: 16px; }
 
 /* Same-Wi-Fi requirement — a boxed callout naming the network (when known) so
    the host can tell guests which Wi-Fi to join. */
 .share-wifi-note {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
   background: #eef6fb;
   border: 1px solid #cfe4f1;
   border-radius: 8px;
@@ -1238,7 +1248,7 @@ label.chk input { width: auto; }
 .share-wifi-note .share-wifi-text strong { color: #1c5374; font-weight: 700; }
 
 /* radio list of things you can share */
-#share-options { display: flex; flex-direction: column; gap: 2px; max-height: 46vh; overflow: auto; margin: 0 -4px; }
+#share-options { display: flex; flex-direction: column; gap: 3px; max-height: 46vh; overflow: auto; margin: 4px -4px 0; }
 .share-opt-head {
   padding: 10px 8px 3px;
   font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #aaa;
@@ -1246,7 +1256,7 @@ label.chk input { width: auto; }
 .share-opt {
   display: flex; align-items: center; gap: 9px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 11px;
   border: none; border-radius: 7px;
   background: transparent; color: #333; font: inherit; font-size: 14px; text-align: left;
   cursor: pointer;
@@ -1265,7 +1275,7 @@ label.chk input { width: auto; }
 .share-opt .so-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12); }
 .share-empty { font-size: 13px; color: #999; padding: 10px 8px; }
 
-.share-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.share-actions { display: flex; align-items: center; gap: 8px; margin-top: 22px; }
 .share-actions .spacer { flex: 1; }
 .share-actions button {
   font: inherit; font-size: 14px;
@@ -1277,6 +1287,109 @@ label.chk input { width: auto; }
 .share-actions .primary:hover { background: #2e8fd2; }
 .share-actions .danger { border-color: #e7c4bc; color: #b3261e; }
 .share-actions .danger:hover { background: #fbeae7; }
+
+/* ---- Export to PDF dialog ------------------------------------------------ */
+#pdf-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 210;
+}
+#pdf-backdrop[hidden] { display: none; }
+#pdf-modal {
+  width: 460px;
+  /* Bound to the backdrop (position:fixed; inset:0), not vw/vh: under the root
+     `zoom: 1.2` viewport units are scaled up and overflow the window (see the
+     note near the bottom of this file), so the modal's title/buttons get pushed
+     off-screen. A percentage resolves against the correctly-sized backdrop, so
+     the modal always fits the window with room to spare and scrolls internally. */
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  padding: 20px;
+}
+/* A classic (non-overlay) scrollbar paints a square strip flush against the
+   right edge, hiding the rounded right corners. A thin scrollbar with a
+   transparent track lets the modal's rounded corners show through, and the
+   inset rounded thumb (drawn inside a transparent border) keeps it subtle. */
+#pdf-modal { scrollbar-width: thin; scrollbar-color: #cdd2d6 transparent; }
+#pdf-modal::-webkit-scrollbar { width: 10px; }
+#pdf-modal::-webkit-scrollbar-track { background: transparent; }
+#pdf-modal::-webkit-scrollbar-thumb {
+  background: #cdd2d6; border-radius: 8px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+#pdf-modal::-webkit-scrollbar-thumb:hover { background: #b7bdc2; background-clip: padding-box; }
+#pdf-modal-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 14px; }
+.pdf-section-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: #9a9a9a; margin: 14px 0 6px;
+}
+.pdf-section-label:first-of-type { margin-top: 0; }
+
+.pdf-opt { display: flex; gap: 10px; padding: 8px 4px; align-items: flex-start; }
+.pdf-opt > input[type="checkbox"] { margin-top: 2px; flex: 0 0 auto; width: 15px; height: 15px; accent-color: #3f9fe0; }
+.pdf-opt-body { flex: 1 1 auto; min-width: 0; }
+.pdf-opt-title { font-size: 13.5px; font-weight: 600; color: #2a2a2a; cursor: pointer; display: inline-block; }
+.pdf-opt-desc { font-size: 12px; color: #888; line-height: 1.5; margin-top: 2px; }
+.pdf-days {
+  width: 46px; padding: 1px 4px; margin: 0 2px;
+  border: 1px solid #d3d3d3; border-radius: 5px; font: inherit; font-size: 12px; text-align: center;
+}
+#pdf-team-days-wrap[hidden] { display: none; }
+
+/* Global-timeline month range: a "Past" and "Future" row, each a select with an
+   inline number input that only appears in the "limit" mode. */
+.pdf-range { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 6px; }
+.pdf-range-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #777; }
+.pdf-range-label { flex: 0 0 44px; font-weight: 600; color: #888; }
+.pdf-select {
+  font: inherit; font-size: 12px; color: #333;
+  padding: 3px 6px; border: 1px solid #d3d3d3; border-radius: 5px; background: #fff;
+}
+.pdf-range-extra { display: inline-flex; align-items: center; gap: 4px; }
+.pdf-range-extra[hidden] { display: none; }
+.pdf-range.disabled { opacity: 0.45; pointer-events: none; }
+
+.pdf-checklist {
+  margin-top: 8px; border: 1px solid #ececec; border-radius: 8px; padding: 4px;
+  max-height: 150px; overflow-y: auto;
+}
+.pdf-checklist.disabled { opacity: 0.45; pointer-events: none; }
+.pdf-check {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 7px; border-radius: 6px; font-size: 13px; color: #333; cursor: pointer;
+}
+.pdf-check:hover { background: rgba(0, 0, 0, 0.04); }
+.pdf-check input { accent-color: #3f9fe0; }
+.pdf-check-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-empty { font-size: 12px; color: #aaa; padding: 8px; }
+
+/* "Save to" folder chooser: the current target folder (ellipsized) + a button. */
+.pdf-folder { display: flex; align-items: center; gap: 8px; }
+.pdf-folder-path {
+  flex: 1 1 auto; min-width: 0;
+  padding: 7px 10px;
+  background: #f4f6f7; border: 1px solid #e2e2e2; border-radius: 7px;
+  font-size: 12.5px; color: #555;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pdf-folder-path.is-default { color: #999; font-style: italic; }
+#pdf-folder-btn {
+  flex: 0 0 auto;
+  padding: 7px 12px; border: 1px solid #cfcfcf; border-radius: 7px;
+  background: #fff; font: inherit; font-size: 12.5px; color: #333; cursor: pointer;
+}
+#pdf-folder-btn:hover { background: #f3f3f3; }
+
+.pdf-paper { display: flex; gap: 18px; }
+.pdf-radio { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #333; cursor: pointer; }
+.pdf-radio input { accent-color: #3f9fe0; }
+
+#pdf-export:disabled { opacity: 0.5; cursor: default; }
 
 /* active-share panel */
 .share-url-row { display: flex; align-items: stretch; gap: 8px; }
@@ -1297,10 +1410,42 @@ label.chk input { width: auto; }
 }
 .share-copy:hover { background: #f3f3f3; }
 .share-copy.copied { background: #d7ecdd; border-color: #9ed4ae; color: #1f7a3d; }
-.share-alt { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.share-alt { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
 .share-alt-item { font-size: 12px; color: #999; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.share-scope-note { margin-top: 12px; font-size: 12.5px; color: #888; line-height: 1.4; }
-.share-trouble { margin-top: 10px; font-size: 11.5px; color: #aaa; line-height: 1.4; }
+.share-scope-note { margin-top: 16px; font-size: 12.5px; color: #888; line-height: 1.5; }
+.share-trouble { margin-top: 14px; font-size: 11.5px; color: #aaa; line-height: 1.5; }
+
+/* Scan-to-open QR + the PIN gate, shown side by side on the live panel. */
+.share-join {
+  margin-top: 18px;
+  display: flex; align-items: stretch; gap: 16px;
+}
+.share-join[hidden] { display: none; }
+.share-qr-wrap {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.share-qr {
+  padding: 8px; background: #fff;
+  border: 1px solid #e2e2e2; border-radius: 8px;
+  line-height: 0;
+}
+.share-qr[hidden] { display: none; }
+.share-qr-cap { font-size: 11.5px; color: #999; }
+.share-pin-block {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; text-align: center;
+  padding: 10px 12px;
+  background: #f4f6f7; border: 1px solid #e2e2e2; border-radius: 8px;
+}
+.share-pin-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8a8a8a; }
+.share-pin {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 30px; font-weight: 700; letter-spacing: .08em; color: #1a5b7a;
+  user-select: all;
+}
+.share-pin-hint { font-size: 11.5px; color: #999; line-height: 1.35; }
 
 /* Step 1b: firewall heads-up shown before the OS password/approval prompt. */
 #share-warn[hidden] { display: none; }
@@ -1321,7 +1466,7 @@ label.chk input { width: auto; }
   flex: 0 0 auto;
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: #1f7a3d; font-weight: 600;
-  padding: 0 4px;
+  padding: 0 4px; margin-left: 2px;
 }
 .share-dot { width: 8px; height: 8px; border-radius: 50%; background: #3fbf6a; box-shadow: 0 0 0 3px rgba(63, 191, 106, 0.22); }
 body.share-view.disconnected .share-dot { background: #c0c0c0; box-shadow: 0 0 0 3px rgba(0,0,0,0.08); }
@@ -1346,13 +1491,21 @@ body.share-view #main,
 body.share-view #kanban,
 body.share-view #global-kanban { min-height: 0; }
 
+/* In the shared view, bottom-anchor a short chart so its date axis sits at the
+   bottom of the chart area (just above the attribution footer) instead of being
+   vertically centred (the app's default, see .gantt-scroll above). A tall chart
+   still scrolls normally (both margins resolve to 0) with the sticky floating
+   axis pinned to the bottom. */
+body.share-view .gantt-scroll > #gantt-render,
+body.share-view .gantt-scroll > #global-gantt-render { margin-top: auto; margin-bottom: 0; }
+
 /* ---- narrow screens (phones): stop the top bar overlapping itself ---- */
 /* The view toggle is absolutely centred in the top bar, so on a wide window it
-   floats over the middle with the title at the left and the "Live view" badge at
-   the right. On a phone there isn't room for all three across one row, so they
-   pile on top of each other. Drop it into normal flow on its own second row and
-   let the title + badge share the first. (Scoped to the viewer + a phone-width
-   query; the app's own window never gets this narrow.) */
+   floats over the middle while the title + "Live view" badge sit together at the
+   left. On a phone there isn't room for the toggle and that pair across one row,
+   so they pile on top of each other. Drop the toggle into normal flow on its own
+   second row and let the title + badge share the first. (Scoped to the viewer + a
+   phone-width query; the app's own window never gets this narrow.) */
 @media (max-width: 640px) {
   body.share-view #toolbar {
     flex: 0 0 auto;        /* was a fixed 48px tall single row */

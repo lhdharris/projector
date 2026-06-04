@@ -214,19 +214,18 @@
     el.draggable = true;
     el.dataset.id = task.id;
 
+    // Status-aware shading (Palette.shade) so a person's mixed-status column
+    // reads at a glance: To Do is the palest, In Progress shows the full pastel,
+    // Done is lighter + desaturated. In Progress also gets a thicker border
+    // (see .team-col .card.active) to stand out further from To Do.
     const hex = opts.colorForTask ? opts.colorForTask(task) : null;
     if (hex && global.Palette) {
-      const border = global.Palette.cardBorder(hex);
-      el.style.background = global.Palette.cardFill(hex);
-      el.style.borderTopColor = border;
-      el.style.borderRightColor = border;
-      el.style.borderBottomColor = border;
-      if (!task.crit && !task.milestone) el.style.borderLeftColor = border;
-    }
-    // In-progress cards get a neon ring drawn from the project's own hue, so it
-    // pops without clashing with the pastel.
-    if (status === 'active' && hex && global.Palette) {
-      el.style.boxShadow = `0 0 0 2px ${global.Palette.neon(hex)}, 0 1px 2px rgba(0, 0, 0, 0.05)`;
+      const sh = global.Palette.shade(hex, status);
+      el.style.background = sh.fill;
+      el.style.borderTopColor = sh.stroke;
+      el.style.borderRightColor = sh.stroke;
+      el.style.borderBottomColor = sh.stroke;
+      if (!task.crit && !task.milestone) el.style.borderLeftColor = sh.stroke;
     }
 
     const badges = [];
@@ -252,13 +251,12 @@
     // card to its new slot. Its clicks must not bubble to the card (edit) / drag.
     const tag = document.createElement('button');
     tag.type = 'button';
-    // One consistent look for every status, tinted from the task's colour code
-    // (status itself is conveyed by the label + the card's ring / greyed-out
-    // state), so the tags sit in the project's colour family rather than a
-    // jarring per-status palette.
+    // In Progress keeps the project-colour tint (it reads better than flat grey);
+    // To Do / Done use the neutral grey .badge look, which stands out clearly as a
+    // clickable dropdown even on those palest cards.
     tag.className = 'card-status-tag badge';
     tag.textContent = STATUS[status].label;
-    if (hex && global.Palette) {
+    if (status === 'active' && hex && global.Palette) {
       tag.style.background = global.Palette.tint(hex);
       tag.style.color = global.Palette.ink(hex);
     }

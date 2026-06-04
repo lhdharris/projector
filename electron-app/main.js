@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const vm = require('vm');
+const https = require('https');
 const shareServer = require('./share-server');
 
 // ---- native Wayland -----------------------------------------------------
@@ -50,6 +52,82 @@ function writeConfig(cfg) {
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
+}
+
+// ---- update check -------------------------------------------------------
+// On launch (and every 24h while running) ask GitHub for the latest published
+// release; if it's newer than this build, offer to open the download page. All
+// failures are silent so an offline launch never interrupts the user. Clicking
+// "Later" remembers the version in config so we don't nag again until there's a
+// newer one.
+// NOTE: we read the /releases LIST (not /releases/latest) and take the newest
+// published, non-draft entry — pre-release or not — because GitHub's
+// /releases/latest endpoint silently skips pre-releases, and Projector has shipped
+// pre-releases. The list is returned newest-first; isNewerVersion still gates the
+// prompt, so an older "newest published" release simply never prompts.
+const RELEASES_API = 'https://api.github.com/repos/lhdharris/projector/releases?per_page=10';
+const RELEASES_PAGE = 'https://github.com/lhdharris/projector/releases/latest';
+
+function fetchLatestRelease() {
+  return new Promise((resolve) => {
+    const req = https.get(RELEASES_API, {
+      headers: { 'User-Agent': 'Projector', Accept: 'application/vnd.github+json' },
+      timeout: 10000,
+    }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); resolve(null); return; }
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        try {
+          const list = JSON.parse(body);
+          const rel = Array.isArray(list) ? list.find((r) => r && !r.draft) : null;
+          resolve(rel ? { tag: rel.tag_name || '', url: rel.html_url || RELEASES_PAGE } : null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+// Compare dotted numeric versions; any non-digit prefix on the remote tag
+// (e.g. a leading "v") is ignored. True only when remote is strictly newer.
+function isNewerVersion(remote, local) {
+  const nums = (s) => String(s).replace(/^[^0-9]*/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const a = nums(remote);
+  const b = nums(local);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+async function checkForUpdates() {
+  const latest = await fetchLatestRelease();
+  if (!latest || !latest.tag) return;
+  const current = app.getVersion();
+  if (!isNewerVersion(latest.tag, current)) return;
+  if (readConfig().dismissedUpdateVersion === latest.tag) return; // user said "Later" already
+  const win = BrowserWindow.getAllWindows()[0];
+  const cleanTag = latest.tag.replace(/^[^0-9]*/, '');
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info',
+    buttons: ['Update now', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Update available',
+    message: 'A new version of Projector is available',
+    detail: `Projector ${cleanTag} is available — you have ${current}.`,
+  });
+  if (response === 0) {
+    shell.openExternal(latest.url);
+  } else {
+    const cfg = readConfig();
+    cfg.dismissedUpdateVersion = latest.tag;
+    writeConfig(cfg);
+  }
 }
 
 // Workspaces are the folders on disk the user has linked; ALL projects live in
@@ -412,7 +490,7 @@ ipcMain.handle('workspaces:remove', (e, dirPath) => {
 
 // The read-only LAN viewer server validates every shared path through the same
 // workspace sandbox that guards projects:read.
-shareServer.init({ resolveProject });
+shareServer.init({ resolveProject, appVersion: app.getVersion(), renderPdf: renderSharePdf });
 
 // payload: { files:[path], title, view, scope } -> { active, primaryUrl, urls, port }
 ipcMain.handle('share:start', (e, payload) => shareServer.start(payload || {}));
@@ -421,6 +499,156 @@ ipcMain.handle('share:status', () => shareServer.status());
 // Current Wi-Fi network name (or null) so the share UI can name the network
 // guests must join.
 ipcMain.handle('share:wifi', () => shareServer.wifiSsid());
+
+// ---- export to PDF ------------------------------------------------------
+
+// A safe PDF basename: drop any path parts, strip characters that are illegal in
+// filenames, and guarantee a .pdf extension.
+function safePdfName(name) {
+  let base = path.basename(String(name || '')).replace(/[\\/:*?"<>|]+/g, ' ').trim();
+  if (!base) base = 'Projector export';
+  if (!/\.pdf$/i.test(base)) base += '.pdf';
+  return base;
+}
+
+// First non-colliding path in `dir` for `base`: "name.pdf", then "name (2).pdf",
+// etc., so a direct write never silently overwrites an existing export.
+function uniquePdfPath(dir, base) {
+  const ext = path.extname(base);
+  const stem = base.slice(0, base.length - ext.length);
+  let target = path.join(dir, base);
+  for (let i = 2; fs.existsSync(target); i++) target = path.join(dir, `${stem} (${i})${ext}`);
+  return target;
+}
+
+// Pick the output folder for "Export to PDF" (in-dialog folder chooser). Returns
+// the chosen directory, or { canceled } if the user backs out.
+ipcMain.handle('pdf:chooseFolder', async (e, payload) => {
+  const parent = BrowserWindow.fromWebContents(e.sender);
+  const current = payload && payload.current;
+  let defaultPath = app.getPath('documents');
+  try { if (current && fs.statSync(current).isDirectory()) defaultPath = current; } catch { /* fall back to Documents */ }
+  const res = await dialog.showOpenDialog(parent, {
+    title: 'Choose export folder',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath,
+  });
+  if (res.canceled || !res.filePaths || !res.filePaths[0]) return { canceled: true };
+  return { dir: res.filePaths[0] };
+});
+
+// Render a complete, self-contained HTML document (inline CSS + inline SVG, no
+// scripts, no external assets) to a PDF Buffer in a hidden, script-disabled
+// window loaded from a temp file (more robust than a huge data: URL for SVG-heavy
+// documents). preferCSSPageSize lets the document's named @page rules drive paper
+// size + per-page orientation, so a single PDF mixes portrait (forecast/team) and
+// landscape (global) pages. Shared by "Export to PDF" and the viewer's "Download
+// PDF"; the temp name is uniquified so concurrent renders never collide.
+async function htmlToPdfBuffer(html) {
+  const tmp = path.join(app.getPath('temp'),
+    `projector-export-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
+  let win = null;
+  try {
+    fs.writeFileSync(tmp, html, 'utf8');
+    win = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, contextIsolation: true, nodeIntegration: false },
+    });
+    await win.loadFile(tmp);
+    return await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+  } finally {
+    if (win && !win.isDestroyed()) win.destroy();
+    fs.rm(tmp, { force: true }, () => {});
+  }
+}
+
+// The renderer hands us a complete, self-contained HTML document. We render it to
+// a PDF and save it. When the renderer supplies a chosen folder we write straight
+// there (deduping the name); otherwise we fall back to a native Save dialog.
+ipcMain.handle('pdf:export', async (e, payload) => {
+  const { html, fileName, defaultName, dir } = payload || {};
+  if (!html) return { canceled: true };
+  const parent = BrowserWindow.fromWebContents(e.sender);
+  const name = safePdfName(fileName || defaultName);
+
+  let outPath = null;
+  let dirOk = false;
+  try { dirOk = !!dir && fs.statSync(dir).isDirectory(); } catch { dirOk = false; }
+  if (dirOk) {
+    outPath = uniquePdfPath(dir, name);
+  } else {
+    const res = await dialog.showSaveDialog(parent, {
+      title: 'Export to PDF',
+      defaultPath: path.join(app.getPath('documents'), name),
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (res.canceled || !res.filePath) return { canceled: true };
+    outPath = res.filePath;
+  }
+
+  try {
+    fs.writeFileSync(outPath, await htmlToPdfBuffer(html));
+  } catch (err) {
+    return { error: (err && err.message) || String(err) };
+  }
+
+  shell.showItemInFolder(outPath);
+  return { path: outPath };
+});
+
+// ---- shared PDF for the meeting viewer ----------------------------------
+
+// The renderer's view modules (Palette / GanttParse / PdfExport) are plain,
+// DOM-free IIFEs that attach to a `window` global. We run them once in a Node vm
+// sandbox so the main process can build the very same export document the app's
+// renderer builds — no duplicated layout logic. Cached: the modules are pure.
+let pdfSandbox = null;
+function exportSandbox() {
+  if (pdfSandbox) return pdfSandbox;
+  const ctx = { window: {} };
+  vm.createContext(ctx);
+  // Order matters: pdf-export.js reads window.Palette + window.GanttParse when it
+  // builds. gantt-parse.js attaches to window.GanttParse only when there's no
+  // CommonJS `module` (we provide none), so it lands on window like the others.
+  for (const f of ['palette.js', 'gantt-parse.js', 'pdf-export.js']) {
+    const src = fs.readFileSync(path.join(__dirname, 'renderer', f), 'utf8');
+    vm.runInContext(src, ctx, { filename: f });
+  }
+  pdfSandbox = ctx.window;
+  return pdfSandbox;
+}
+
+// Build the export HTML for a meeting-share /data payload: every page (Forecast,
+// Team, Global) for exactly the shared projects, with sensible default windows.
+function renderShareHtml(data) {
+  const { Palette, GanttParse, PdfExport } = exportSandbox();
+  const projects = (data.projects || []).map((p) => ({
+    file: p.id,
+    title: p.title,
+    color: Palette.colorFor({ color: Palette.readColor(p.rawMd), title: p.title, file: p.id }),
+    model: GanttParse.parseGantt(GanttParse.extractMermaidBlock(p.rawMd).code),
+  }));
+  const scopeKind = data.scope === 'global' ? 'all' : 'project';
+  return PdfExport.buildDocument({
+    scopeKind,
+    scopeTitle: data.title || (scopeKind === 'all' ? 'All projects' : (projects[0] && projects[0].title) || 'Project'),
+    scopeProjects: projects,
+    forecast: { on: true, days: 7 },
+    team: { on: true, days: 7 },
+    windowDays: 7,
+    global: { on: true, projects, past: { mode: 'none', months: 3 }, future: { mode: 'all', months: 3 } },
+    pageSize: 'Letter',
+    profileName: '',
+    todayISO: GanttParse.todayISO(),
+    appVersion: data.version || app.getVersion(),
+  });
+}
+
+// Injected into share-server (init below): turn a /data payload into a PDF Buffer
+// the viewer downloads. Errors propagate so the route can answer 500.
+async function renderSharePdf(data) {
+  return htmlToPdfBuffer(renderShareHtml(data));
+}
 
 // ---- lifecycle ----------------------------------------------------------
 
@@ -451,6 +679,9 @@ if (!app.requestSingleInstanceLock()) {
       try { app.dock.setIcon(APP_ICON); } catch { /* non-fatal */ }
     }
     createWindow();
+    // Offer an update if a newer GitHub release exists — now and every 24h.
+    checkForUpdates();
+    setInterval(checkForUpdates, 24 * 60 * 60 * 1000);
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });

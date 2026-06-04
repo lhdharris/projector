@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('share', {
   wifi:   () => ipcRenderer.invoke('share:wifi'),
 });
 
+// "Export to PDF": the renderer builds a self-contained HTML document, the main
+// process renders it to a PDF the user saves to disk.
+contextBridge.exposeInMainWorld('pdfExport', {
+  save:         (payload) => ipcRenderer.invoke('pdf:export', payload),
+  chooseFolder: (current) => ipcRenderer.invoke('pdf:chooseFolder', { current }),
+});
+
 // Project file storage. Everything lives as .md files in a user-chosen
 // folder; the renderer never touches the filesystem directly.
 contextBridge.exposeInMainWorld('projects', {

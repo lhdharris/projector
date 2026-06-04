@@ -277,6 +277,62 @@
     return toISO(new Date());
   }
 
+  // Resolve each task's start/end to absolute timestamps, replaying Mermaid's
+  // scheduling to a fixpoint so out-of-order "after" refs and bare-duration
+  // chains settle: an absolute date wins; "after a b" starts at the latest end
+  // of its refs; a blank start follows the previous task in document order; a
+  // date in the duration slot is an explicit end, otherwise end = start +
+  // duration (milestones have zero length). Tasks whose dates never resolve
+  // (e.g. an "after" pointing at an undated task) are simply absent from the
+  // returned maps. Single source of truth shared by the Gantt view (span/width
+  // sizing) and the PDF export (placing bars).
+  function resolveSchedule(model) {
+    const DAY = 86400000;
+    const tasks = (model && model.tasks) || [];
+    const startMs = new Map();
+    const endMs = new Map();
+
+    for (let pass = 0; pass <= tasks.length; pass++) {
+      let progressed = false;
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        if (!startMs.has(t.id)) {
+          let s = null;
+          if (t.start && DATE_RE.test(t.start)) {
+            const v = Date.parse(t.start + 'T00:00:00');
+            if (!Number.isNaN(v)) s = v;
+          } else if (t.start && /^after\s+/i.test(t.start)) {
+            const ids = t.start.trim().split(/\s+/).slice(1);
+            let mx = -Infinity;
+            let ok = ids.length > 0;
+            for (const id of ids) {
+              if (endMs.has(id)) mx = Math.max(mx, endMs.get(id));
+              else ok = false;
+            }
+            if (ok && Number.isFinite(mx)) s = mx;
+          } else if (!t.start) {
+            const prev = tasks[i - 1];
+            if (prev && endMs.has(prev.id)) s = endMs.get(prev.id);
+          }
+          if (s != null) { startMs.set(t.id, s); progressed = true; }
+        }
+        if (startMs.has(t.id) && !endMs.has(t.id)) {
+          let e = null;
+          if (t.duration && DATE_RE.test(t.duration)) {
+            const v = Date.parse(t.duration + 'T00:00:00');
+            if (!Number.isNaN(v)) e = v;
+          } else {
+            const dur = t.milestone ? 0 : Math.max(0, parseDurationDays(t.duration));
+            e = startMs.get(t.id) + dur * DAY;
+          }
+          if (e != null) { endMs.set(t.id, e); progressed = true; }
+        }
+      }
+      if (!progressed) break;
+    }
+    return { startMs, endMs };
+  }
+
   const api = {
     extractMermaidBlock,
     parseGantt,
@@ -287,6 +343,7 @@
     addDays,
     toISO,
     todayISO,
+    resolveSchedule,
     DATE_RE,
     DUR_RE,
   };
