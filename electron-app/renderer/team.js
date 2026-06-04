@@ -138,6 +138,11 @@
     for (const name of (opts.roster || [])) {
       if (name) buckets.set(name, []);
     }
+    // Members in their run-out-of-tasks grace period keep an (empty) column so
+    // they can grey out as feedback before dropping off.
+    for (const name of (opts.linger || [])) {
+      if (name && !buckets.has(name)) buckets.set(name, []);
+    }
     for (const t of tasks) {
       const key = t.assignee || UNASSIGNED;
       if (!buckets.has(key)) buckets.set(key, []);
@@ -167,6 +172,7 @@
   function column(label, assignee, tasks, handlers, opts, nameById) {
     const colEl = document.createElement('div');
     colEl.className = 'kanban-col team-col' + (assignee ? '' : ' unassigned');
+    if (assignee && opts.linger && opts.linger.has(assignee)) colEl.classList.add('lingering');
     colEl.dataset.assignee = assignee;
 
     const head = document.createElement('div');

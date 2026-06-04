@@ -1,6 +1,6 @@
 {
   "name": "projector-app",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "A Markdown + Mermaid-gantt project planner with a minimalist frameless UI.",
   "main": "main.js",
   "homepage": "https://github.com/lhdharris/projector",

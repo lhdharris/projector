@@ -158,6 +158,9 @@
     item.innerHTML = `<span class="pi-dot"></span><span class="pi-title"></span>`;
     item.querySelector('.pi-dot').style.background = window.Palette.colorFor(p);
     item.querySelector('.pi-title').textContent = p.title;
+    // Native tooltip so a title truncated to "…" in the fixed-width sidebar can
+    // still be read in full on hover.
+    item.title = p.title;
     item.addEventListener('click', () => selectProject(p.file));
     item.addEventListener('contextmenu', (e) => { e.preventDefault(); openProjectMenu(e, p); });
     item.addEventListener('dragstart', (e) => {
@@ -292,6 +295,50 @@
     }
   }
 
+  // ---- Team view: grace period when a member runs out of tasks ----------
+  // In the single-project Team view a person only has a column because they
+  // hold a task there, so reassigning/removing their last one would normally
+  // make the column vanish instantly. Instead we keep it for 5s, greyed, as
+  // feedback that they're about to drop off — assigning a task back inside that
+  // window cancels it. Explicit "Delete team member" stays immediate (it adds
+  // the name to teamExplicitRemove so the grace below is skipped for it).
+  let teamLinger = new Map();        // name -> setTimeout id (members in their grace)
+  let teamShownPrev = new Set();     // names that had >=1 task at the last team render
+  let teamScopeKey = null;           // 'global' or currentFile — reset grace on scope change
+  let teamExplicitRemove = new Set();// names just deleted via the menu (skip grace once)
+  const TEAM_LINGER_MS = 5000;
+
+  function teamRender(container, tasks, handlers, opts) {
+    opts = opts || {};
+    const scopeKey = state.mode === 'global' ? 'global' : (state.currentFile || '');
+    if (scopeKey !== teamScopeKey) {            // switched view: drop stale graces
+      for (const id of teamLinger.values()) clearTimeout(id);
+      teamLinger.clear();
+      teamShownPrev = new Set();
+      teamScopeKey = scopeKey;
+    }
+    const withTasks = new Set();
+    for (const t of tasks) if (t.assignee) withTasks.add(t.assignee);
+    const roster = new Set(opts.roster || []);
+    // Rescued: regained a task (or is a permanent roster member) -> cancel grace.
+    for (const name of [...teamLinger.keys()]) {
+      if (withTasks.has(name) || roster.has(name)) {
+        clearTimeout(teamLinger.get(name));
+        teamLinger.delete(name);
+      }
+    }
+    // Just lost their last task -> start the grace timer (unless roster-seeded,
+    // already lingering, or explicitly deleted).
+    for (const name of teamShownPrev) {
+      if (withTasks.has(name) || roster.has(name) || teamLinger.has(name) || teamExplicitRemove.has(name)) continue;
+      teamLinger.set(name, setTimeout(() => { teamLinger.delete(name); renderCurrentView(); }, TEAM_LINGER_MS));
+    }
+    teamExplicitRemove.clear();
+    const linger = new Set([...teamLinger.keys()].filter((n) => !withTasks.has(n) && !roster.has(n)));
+    window.Team.render(container, tasks, handlers, Object.assign({}, opts, { linger }));
+    teamShownPrev = withTasks;
+  }
+
   function renderCurrentView() {
     if (state.mode === 'global') return renderGlobalView();
     if (!state.model) return;
@@ -314,7 +361,7 @@
       // No roster passed: a single project shows only people who actually have
       // a task in it, not the whole team. (Global view below passes the full
       // roster so everyone appears.)
-      window.Team.render(tm, state.model.tasks, {
+      teamRender(tm, state.model.tasks, {
         onEditTask: openEditModal,
         onReassign: reassignTask,
         onSetStatus: moveTask,
@@ -393,7 +440,7 @@
       });
     } else if (state.view === 'team') {
       gtm.hidden = false;
-      window.Team.render(gtm, state.built.kanbanModel.tasks, {
+      teamRender(gtm, state.built.kanbanModel.tasks, {
         onEditTask: openGlobalKanbanTask,
         onReassign: globalReassign,
         onSetStatus: globalMoveTask,
@@ -512,6 +559,10 @@
       }, scope);
     }
     setSavedRosterFor(scope, savedRosterFor(scope).filter((n) => n !== name));
+    // Intentional delete is immediate: skip the run-out-of-tasks grace period
+    // and cancel any grace already running for this name.
+    teamExplicitRemove.add(name);
+    if (teamLinger.has(name)) { clearTimeout(teamLinger.get(name)); teamLinger.delete(name); }
     await refreshAfterTeamChange();
   }
 
@@ -1365,13 +1416,19 @@
 
   // ---- right-click context menu ----------------------------------------
   function openProjectMenu(e, p) {
-    const items = [{ label: 'Reveal in folder', onClick: () => window.projects.revealItem(p.file) }];
+    const items = [
+      { label: 'Rename…', onClick: () => renameProject(p) },
+      { label: 'Reveal in folder', onClick: () => window.projects.revealItem(p.file) },
+    ];
     items.push({ separator: true }, { header: 'Colour' });
     items.push({ swatches: true, current: p.color, onPick: (hex) => setProjectColor(p, hex) });
-    items.push({ separator: true }, { header: 'Profile' });
-    items.push({ label: '— none —', onClick: () => setProjectProfile(p, '') });
-    for (const name of state.profiles) {
-      items.push({ label: name + (p.profile === name ? '  ✓' : ''), onClick: () => setProjectProfile(p, name) });
+    // Every project carries a profile, so there's no "none" choice — only the
+    // real profiles (and nothing at all until one exists).
+    if (state.profiles.length) {
+      items.push({ separator: true }, { header: 'Profile' });
+      for (const name of state.profiles) {
+        items.push({ label: name + (p.profile === name ? '  ✓' : ''), onClick: () => setProjectProfile(p, name) });
+      }
     }
     const targets = state.folders.filter((f) => f.path !== p.folderPath);
     if (targets.length) {
@@ -1754,6 +1811,42 @@
     await loadProjects(state.currentFile || undefined);
     await loadTeam(); // the active profile (and its roster) may have changed
     if (state.mode === 'global') await enterGlobal();
+  }
+
+  // Rename a project (from its right-click menu). The title lives in two places
+  // that must stay in sync: the markdown H1 heading (which the sidebar reads
+  // first) and the mermaid `title` line (which the Timeline shows), so update
+  // both, then refresh in-memory state + the open view.
+  async function renameProject(p) {
+    const next = await promptText('Rename project', p.title, 'Rename');
+    if (next === null) return;
+    const name = next.trim();
+    if (!name || name === p.title) return;
+
+    const md = await window.projects.read(p.file);
+    const m = P.parseGantt(P.extractMermaidBlock(md).code);
+    m.title = name;
+    // Replace the first H1 heading if there is one (function replacement keeps
+    // any '$' in the new name literal). Files without an H1 fall back to the
+    // mermaid title, which we set above.
+    const withHeading = /^\s*#\s+.+$/m.test(md)
+      ? md.replace(/^(\s*#\s+).+$/m, (_, pre) => pre + name)
+      : md;
+    const newMd = P.writeBackToMarkdown(withHeading, m);
+    await window.projects.write(p.file, newMd);
+
+    p.title = name;
+    const meta = state.projects.find((x) => x.file === p.file);
+    if (meta) meta.title = name;
+    const g = state.global.find((x) => x.file === p.file);
+    if (g) g.title = name;
+    if (state.currentFile === p.file) {
+      state.rawMd = newMd;
+      if (state.model) state.model.title = name;
+    }
+    renderProjectList();
+    if (state.mode === 'global') renderGlobalView();
+    else if (state.currentFile === p.file) renderCurrentView();
   }
 
   // Set one project's profile (from its right-click menu).

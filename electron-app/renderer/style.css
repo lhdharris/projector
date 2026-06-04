@@ -196,6 +196,11 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 
 #sidebar {
   flex: 0 0 240px;
+  /* A flex item's default min-width:auto is its content's min-content size, which
+     overrides the 240px basis: a long, unbreakable project title would balloon the
+     whole sidebar (and, with room to spare, stop .pi-title ever ellipsising). Pin
+     it to 0 so the panel holds 240px and titles truncate instead. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: #f6f6f6;
@@ -255,7 +260,7 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
   background: #ccc;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
 }
-.pi-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-item.dragging { opacity: 0.5; }
 .list-empty { padding: 10px; color: #aaa; font-size: 13px; font-style: italic; }
 
@@ -438,6 +443,9 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 /* Team-card status: done is greyed back, in-progress is ringed (the neon ring
    colour itself is set inline per-card from the project hue). */
 .team-col .card { position: relative; }
+/* Member is about to drop off (ran out of tasks): grey out for a few seconds as
+   feedback. Stays interactive so a dropped card / "Add task" can rescue them. */
+.team-col.lingering { opacity: 0.4; filter: grayscale(0.6); transition: opacity 0.3s ease; }
 .team-col .card.done { opacity: 0.5; }
 .team-col .card.done:hover { opacity: 0.8; }
 /* In-progress cards stand out from To Do at a glance: a fuller (less faded)
@@ -738,7 +746,11 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  max-width: 60%;
+  /* Reserve room for the zoom group (~126px) on both sides of the centred title
+     plus the toolbar's right padding and a gap, so the title can never reach it
+     when the window narrows. max(0px, …) lets the title collapse (and hide via
+     overflow) on a tiny window instead of dropping the cap. */
+  max-width: max(0px, calc(100% - 320px));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

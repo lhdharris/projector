@@ -123,7 +123,11 @@
         useWidth: chartWidth(days),
         useMaxWidth: false,
         barHeight: 22,
-        barGap: 6,
+        // Mermaid sizes each section band as taskCount * (barHeight + barGap),
+        // and centres the section label in it. A roomy gap means even a
+        // one-task band (one row) is tall enough to hold a two-line wrapped
+        // label (see wrapSectionLabels) without the lines colliding.
+        barGap: 16,
         topPadding: 48,
         leftPadding: LEFT_PADDING,
         gridLineStartPadding: 35,
@@ -220,6 +224,9 @@
       // the right of its bar (and widen the canvas to fit) BEFORE captureBaseSize,
       // so baseW reflects any widening.
       reflowLeftLabels(targetEl, id);
+      // Wrap any section label (project title in the global view) that's too wide
+      // for the gutter onto a second line, so it stops spilling over the bars.
+      wrapSectionLabels(targetEl);
       captureBaseSize(targetEl);
       // A heavier vertical rule at each month boundary, so multi-month spans read
       // as months rather than an undifferentiated run of day/week gridlines.
@@ -355,6 +362,79 @@
     }
   }
 
+  // Mermaid draws each section label (a full project title in the global view)
+  // as a single-line <text> pinned in the left gutter; one wider than the gutter
+  // spills right over the task bars. Mermaid already lays multi-line labels out
+  // itself — a <text dy="-(lines-1)/2 em"> wrapping per-line <tspan x="10">, the
+  // first line alignment-baseline:central and later lines dy="1em" — so we wrap
+  // an over-wide label onto a second line in that exact shape, ellipsising line
+  // two if it still overflows. The roomy barGap (see configure) keeps even a
+  // one-task band tall enough for the two lines to sit without colliding.
+  function wrapSectionLabels(targetEl) {
+    const svg = targetEl.querySelector('svg');
+    if (!svg) return;
+    const labels = svg.querySelectorAll('text.sectionTitle');
+    if (!labels.length) return;
+    const PAD = 6;
+    const ELLIPSIS = '…';
+
+    labels.forEach((text) => {
+      // Leave labels Mermaid already split onto multiple lines alone.
+      if (text.querySelectorAll('tspan').length > 1) return;
+      const full = (text.textContent || '').trim();
+      if (!full) return;
+      let box;
+      try { box = text.getBBox(); } catch (_) { return; }
+      const avail = LEFT_PADDING - box.x - PAD;
+      if (avail <= 0 || box.width <= avail) return; // already fits the gutter
+
+      const x = text.getAttribute('x') || '10';
+
+      // Measure candidates with a throwaway tspan so they inherit the label font.
+      const probe = document.createElementNS(SVG_NS, 'tspan');
+      text.appendChild(probe);
+      const widthOf = (s) => {
+        probe.textContent = s;
+        try { return probe.getComputedTextLength(); } catch (_) { return 0; }
+      };
+
+      // Greedily fill line 1; the remaining words spill to line 2.
+      const words = full.split(/\s+/);
+      let l1 = '';
+      let i = 0;
+      for (; i < words.length; i++) {
+        const cand = l1 ? l1 + ' ' + words[i] : words[i];
+        if (l1 && widthOf(cand) > avail) break;
+        l1 = cand;
+      }
+      let l2 = words.slice(i).join(' ');
+      if (l2 && widthOf(l2) > avail) {
+        while (l2 && widthOf(l2 + ELLIPSIS) > avail) l2 = l2.slice(0, -1);
+        l2 = l2.replace(/\s+$/, '') + ELLIPSIS;
+      }
+      text.removeChild(probe);
+      if (!l2) return; // a single unbreakable word — leave the one line as-is
+
+      // Rebuild as two centred lines, mirroring Mermaid's own multi-line shape
+      // but with leading: a 1em line gap makes 13px glyphs touch, so space the
+      // lines LINE_GAP apart and shift the block up by half that to stay centred.
+      const LINE_GAP = 1.35; // em, line-to-line spacing
+      text.textContent = '';
+      text.setAttribute('dy', `${-LINE_GAP / 2}em`);
+      const t1 = document.createElementNS(SVG_NS, 'tspan');
+      t1.setAttribute('x', x);
+      t1.setAttribute('alignment-baseline', 'central');
+      t1.textContent = l1;
+      const t2 = document.createElementNS(SVG_NS, 'tspan');
+      t2.setAttribute('x', x);
+      t2.setAttribute('alignment-baseline', 'central');
+      t2.setAttribute('dy', `${LINE_GAP}em`);
+      t2.textContent = l2;
+      text.appendChild(t1);
+      text.appendChild(t2);
+    });
+  }
+
   // Global (grouped) view: each project is one Mermaid section (global.js sets
   // every task's `assignee` to its project title), so draw a faint horizontal
   // rule between consecutive project bands. We derive each band's vertical extent
@@ -380,6 +460,31 @@
       b.top = Math.min(b.top, y);
       b.bottom = Math.max(b.bottom, y + h);
       bands.set(key, b);
+    });
+
+    // A wrapped two-line section label (wrapSectionLabels) is centred on its
+    // band but, for a one-task band, spills past the single bar. Fold each
+    // label's own vertical extent into its band before placing the rule, so the
+    // separator lands in the real gap between labels rather than through line two.
+    const bandList = [...bands.values()].filter((b) => Number.isFinite(b.top));
+    svg.querySelectorAll('text.sectionTitle').forEach((label) => {
+      let box;
+      try { box = label.getBBox(); } catch (_) { return; }
+      if (!box || !Number.isFinite(box.y)) return;
+      const cy = box.y + box.height / 2;
+      // The label is centred in its band, so its centre falls in one band's bar
+      // range; fall back to the nearest band centre if it sits in a gap.
+      let band = bandList.find((b) => cy >= b.top && cy <= b.bottom);
+      if (!band) {
+        let bestD = Infinity;
+        for (const b of bandList) {
+          const d = Math.abs((b.top + b.bottom) / 2 - cy);
+          if (d < bestD) { bestD = d; band = b; }
+        }
+      }
+      if (!band) return;
+      band.top = Math.min(band.top, box.y);
+      band.bottom = Math.max(band.bottom, box.y + box.height);
     });
 
     const ordered = [...bands.values()]
