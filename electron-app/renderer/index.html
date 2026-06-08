@@ -192,6 +192,44 @@
     </div>
   </div>
 
+  <!-- Import / duplicate with new dates: name + anchor choice + date -->
+  <div id="reschedule-backdrop" hidden>
+    <div id="reschedule-modal">
+      <div id="reschedule-title">Import as…</div>
+      <form id="reschedule-form">
+        <label class="newproj-label" for="reschedule-name">Name</label>
+        <input type="text" id="reschedule-name" autocomplete="off">
+
+        <div id="reschedule-caption">Anchor the new timeline around:</div>
+        <div class="reschedule-anchor" role="radiogroup" aria-label="Anchor the new schedule on">
+          <label><input type="radio" name="reschedule-anchor" value="start" checked> Project start date</label>
+          <label><input type="radio" name="reschedule-anchor" value="end"> Project end date</label>
+          <label><input type="radio" name="reschedule-anchor" value="task"> A specific task</label>
+        </div>
+
+        <select id="reschedule-task" hidden aria-label="Task to pin"></select>
+
+        <label class="newproj-label" id="reschedule-date-label" for="reschedule-date">Date</label>
+        <span class="date-field">
+          <input type="text" id="reschedule-date" autocomplete="off" inputmode="numeric" placeholder="YYYY-MM-DD">
+          <button type="button" id="reschedule-date-cal" class="date-cal-btn" tabindex="-1" aria-label="Open calendar">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <rect x="2" y="3" width="12" height="11" rx="2"></rect>
+              <line x1="2" y1="6.5" x2="14" y2="6.5"></line>
+              <line x1="5.5" y1="1.6" x2="5.5" y2="4"></line>
+              <line x1="10.5" y1="1.6" x2="10.5" y2="4"></line>
+            </svg>
+          </button>
+        </span>
+
+        <div id="reschedule-actions">
+          <button type="button" id="reschedule-cancel">Cancel</button>
+          <button type="submit" id="reschedule-ok" class="primary">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Settings panel: profiles + team members -->
   <div id="settings-backdrop" hidden>
     <div id="settings-modal">

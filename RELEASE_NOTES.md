@@ -1,28 +1,30 @@
-# Projector v1.4.1
+# Projector v1.4.2
 
 A local-first project & **team** planner built on plain Markdown + Mermaid gantt
 charts. Every project is just a `.md` file in a folder you control — no cloud
 account, no subscription, no server.
 
-A polish-and-fixes release on top of v1.4.0 — mostly around long project titles,
-the Team view, and the toolbar.
+A Timeline-readability and rescheduling release on top of v1.4.1.
 
-## Fixes & improvements
-- **Rename a project from the sidebar.** Right-click a project → **Rename…** to
-  retitle it; the change is written to both the heading and the Timeline title so
-  every view stays in sync.
-- **Long project titles behave everywhere.** In the global **Timeline**, an
-  over-wide project title now wraps onto a second line instead of spilling across
-  the bars; in the **sidebar** a long title truncates with an ellipsis and shows
-  the full name on hover, and can no longer stretch the sidebar wider.
-- **Team view eases members off, not out.** When someone runs out of tasks in a
-  project's Team view their column now greys out for a few seconds before
-  disappearing — drop a task back on them within that window and they stay.
-  "Delete team member" is still immediate.
-- **Toolbar title stays clear of the zoom controls.** On a narrow window the
-  centred project title no longer slides under the +/- zoom buttons.
-- **Tidier project menu.** The redundant "— none —" profile entry is gone; the
-  Profile section only appears once you actually have profiles.
+## Timeline & Gantt
+- **A faint gridline on every day.** Weekly- and monthly-tick charts now draw a
+  light rule on each unlabelled day, so you can see exactly where a day falls
+  between the dated ticks instead of guessing.
+- **Bars and titles sit centred in their rows.** Task bars, labels and milestone
+  diamonds are now vertically centred in each row band rather than riding high
+  with dead space below — so single-task bands and dense charts both read cleanly.
+- **Weekday labels on weekly charts.** In the weekly-tick regime the bottom axis
+  now reads **`Sun 07`, `Sun 14`, …** (weekday + day) instead of repeating the
+  month that's already in the sticky top header — confirming that each gridline
+  lands on a Sunday week boundary.
+
+## Import / Duplicate with new dates
+- **Anchor the new timeline on any fixed point.** "Import as…" and "Duplicate
+  with new dates…" now let you choose what stays put: the **project start date**,
+  the **project end date**, or **a specific task** (e.g. a milestone). Pick the
+  anchor, set its date, and every other task shifts by the same offset — durations
+  and relative ("after") gaps are preserved, so you can rebase a whole plan around
+  the one date that's actually fixed.
 
 ## Highlights (carried over from v1.4)
 - **Export to PDF**, **PIN + QR-gated local share**, **automatic update checks**,
@@ -36,10 +38,10 @@ the Team view, and the toolbar.
 ## Downloads
 | Platform | File |
 |---|---|
-| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.4.1.x86_64.rpm` — `sudo rpm -i …` |
-| Debian/Ubuntu (DEB) | `projector-app_1.4.1_amd64.deb` — `sudo dpkg -i …` |
-| macOS (DMG) | `Projector-1.4.1.dmg` *(added once built on a Mac)* |
-| Windows (EXE) | `Projector Setup 1.4.1.exe` *(added once built on a Mac)* |
+| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.4.2.x86_64.rpm` — `sudo rpm -i …` |
+| Debian/Ubuntu (DEB) | `projector-app_1.4.2_amd64.deb` — `sudo dpkg -i …` |
+| macOS (DMG) | `Projector-1.4.2.dmg` *(added once built on a Mac)* |
+| Windows (EXE) | `Projector Setup 1.4.2.exe` *(added once built on a Mac)* |
 
 > These builds are **unsigned**. macOS: right-click → **Open** (or
 > `xattr -dr com.apple.quarantine /Applications/Projector.app`). Windows

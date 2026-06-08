@@ -15,6 +15,11 @@
   const MIN_DAYS = 21;
   const MAX_WIDTH = 9000;
 
+  // Below this per-day width (px), a faint rule on every day reads as a grey
+  // wash rather than a grid, so addDayGridlines leaves those (monthly-tick)
+  // charts to the month rules alone. The weekly regime (22px) clears it.
+  const DAY_LINE_MIN_PX = 16;
+
   // Mermaid draws the gantt's bottom axis (line + date labels) at
   // y = chartHeight - 50, not flush to the SVG bottom. The floating strip crops
   // the whole region from that axis line down to the SVG bottom and overlaps it
@@ -25,12 +30,15 @@
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
   // Axis regime by span. Short projects get a gridline + weekday label on
-  // EVERY day, spaced generously so nothing feels cramped; longer ones step up
-  // to weekly/monthly ticks (and a tighter day scale) to stay legible. `px` is
-  // the per-day width that pins a constant horizontal scale.
+  // EVERY day, spaced generously so nothing feels cramped; medium ones step up
+  // to weekly ticks but keep the weekday + day-of-month label (the weekly
+  // gridlines all land on Sundays, so this confirms the week boundary — the
+  // month is already shown in the sticky top header, no need to repeat it).
+  // Long projects step up to monthly ticks, where the tick *is* the month
+  // marker. `px` is the per-day width that pins a constant horizontal scale.
   function axisFor(days) {
     if (days <= 120) return { tickInterval: '1day',   axisFormat: '%a %d',   px: 46 };
-    if (days <= 400) return { tickInterval: '1week',  axisFormat: '%b %d',   px: 22 };
+    if (days <= 400) return { tickInterval: '1week',  axisFormat: '%a %d',   px: 22 };
     return { tickInterval: '1month', axisFormat: "%b '%y", px: 11 };
   }
 
@@ -154,6 +162,7 @@
   let baseW = 0;
   let baseH = 0;
   let lastSpan = null;     // { startMs, minMs, maxMs, days } from the last render
+  let lastTaskShiftY = 0;  // px the task group was nudged down to centre in bands
 
   // Defuse task names that collide with Mermaid's gantt line grammar. The chart
   // is rendered from a freshly serialized copy, so we patch the names render-side
@@ -227,10 +236,22 @@
       // Wrap any section label (project title in the global view) that's too wide
       // for the gutter onto a second line, so it stops spilling over the bars.
       wrapSectionLabels(targetEl);
+      // Mermaid parks each bar at the TOP of its (taller) row band, dumping the
+      // barGap as dead space below, so titles ride high in their block. Nudge the
+      // whole task group down to sit centred. Must precede addGroupSeparators,
+      // which reads the bars' positions to place the per-project rules.
+      centerTaskRows(targetEl, id);
+      // Mermaid also leaves the section labels (assignee / project title) a couple
+      // of px low in their bands; recentre so a single-task band reads as centred.
+      // Before addGroupSeparators, which folds the (now-centred) label boxes in.
+      centerSectionLabels(targetEl);
       captureBaseSize(targetEl);
       // A heavier vertical rule at each month boundary, so multi-month spans read
       // as months rather than an undifferentiated run of day/week gridlines.
       addMonthBoundaries(targetEl);
+      // Faint vertical rule on every unlabelled day, so a weekly/monthly-tick
+      // chart still shows where each day falls between the labelled dates.
+      addDayGridlines(targetEl);
       // Global view only: faint rules between the per-project bands.
       if (targetEl.id === 'global-gantt-render') addGroupSeparators(targetEl, id);
       applyZoom();
@@ -435,6 +456,123 @@
     });
   }
 
+  // Vertically centre each task's bar + label within its row band. Mermaid sizes
+  // every row band as barHeight + barGap and pins the bar to the band's TOP, so
+  // the whole barGap becomes empty space BELOW the bar and the title sits high in
+  // its block rather than midway between the row dividers. The bars + labels (and
+  // milestone diamonds + link wrappers) all live in a single <g>, so one
+  // translate on that group recentres them together without disturbing the bands,
+  // gridlines, today line or section labels. We measure the offset from the
+  // rendered geometry — the gap between a bar's centre and its band's centre — so
+  // it tracks Mermaid's layout rather than hard-coding the barGap. addGroupSeparators
+  // reads the bars' (unshifted) y attributes, so we record the shift for it to add.
+  function centerTaskRows(targetEl, renderId) {
+    lastTaskShiftY = 0;
+    const svg = targetEl.querySelector('svg');
+    if (!svg || !lastModel || !lastModel.tasks.length) return;
+    const prefix = renderId + '-';
+
+    // Row bands: one `rect.section*` per task row, taller than the bar it holds.
+    const bands = [];
+    svg.querySelectorAll('rect.section').forEach((r) => {
+      const y = parseFloat(r.getAttribute('y'));
+      const h = parseFloat(r.getAttribute('height'));
+      if (Number.isFinite(y) && Number.isFinite(h)) bands.push({ y, h });
+    });
+    if (!bands.length) return;
+
+    // A representative task bar (first task that has a rect) and the group it's in.
+    let bar = null;
+    let group = null;
+    for (const t of lastModel.tasks) {
+      const el = svg.querySelector(`[id="${CSS.escape(prefix + t.id)}"]`);
+      if (!el) continue;
+      const rect = el.tagName.toLowerCase() === 'rect'
+        ? el
+        : (el.querySelector && el.querySelector('rect'));
+      if (rect) { bar = rect; group = rect.closest('g'); break; }
+    }
+    if (!bar || !group) return;
+    const by = parseFloat(bar.getAttribute('y'));
+    const bh = parseFloat(bar.getAttribute('height'));
+    if (!Number.isFinite(by) || !Number.isFinite(bh)) return;
+
+    // The band that vertically contains this bar; centre the bar in it.
+    const barCenter = by + bh / 2;
+    const band = bands.find((b) => barCenter >= b.y && barCenter <= b.y + b.h);
+    if (!band) return;
+    const delta = (band.y + band.h / 2) - barCenter;
+    if (Math.abs(delta) < 0.5) return; // already centred — leave it alone
+
+    const prev = group.getAttribute('transform');
+    group.setAttribute('transform', `${prev ? prev + ' ' : ''}translate(0, ${delta})`);
+    lastTaskShiftY = delta;
+  }
+
+  // Vertically centre each section label on its band. Mermaid centres the label
+  // (the assignee in the single-project view, the project title in the global
+  // view) on its section but with a small constant downward baseline bias, so on
+  // a tall multi-task band it looks centred while on a short single-task band the
+  // title sits visibly low. We rebuild each section's full vertical extent from
+  // its row bands and nudge the label's box onto that centre. Runs as a sibling
+  // of centerTaskRows so the two together leave a single-task row reading as
+  // bar + label both centred between the row dividers.
+  function centerSectionLabels(targetEl) {
+    const svg = targetEl.querySelector('svg');
+    if (!svg) return;
+    const labels = [...svg.querySelectorAll('text.sectionTitle')];
+    if (!labels.length) return;
+
+    // Per-row section bands -> per-section extents. Consecutive rows in one
+    // section share a sectionN class; the styles alternate, so adjacent sections
+    // always differ — runs of equal class therefore delimit whole sections.
+    const rows = [...svg.querySelectorAll('rect.section')]
+      .map((r) => ({
+        y: parseFloat(r.getAttribute('y')),
+        h: parseFloat(r.getAttribute('height')),
+        cls: r.getAttribute('class') || '',
+      }))
+      .filter((r) => Number.isFinite(r.y) && Number.isFinite(r.h))
+      .sort((a, b) => a.y - b.y);
+    if (!rows.length) return;
+    const runs = [];
+    for (const r of rows) {
+      const last = runs[runs.length - 1];
+      if (last && last.cls === r.cls && Math.abs(r.y - last.bottom) < 1) {
+        last.bottom = r.y + r.h;
+      } else {
+        runs.push({ cls: r.cls, top: r.y, bottom: r.y + r.h });
+      }
+    }
+
+    // Match labels to runs in vertical order; bail on any mismatch rather than
+    // risk centring a label on the wrong band.
+    const items = [];
+    for (const label of labels) {
+      let box;
+      try { box = label.getBBox(); } catch (_) { return; }
+      items.push({ label, box });
+    }
+    items.sort((a, b) => a.box.y - b.box.y);
+    if (items.length !== runs.length) return;
+
+    items.forEach(({ label, box }, i) => {
+      const center = (runs[i].top + runs[i].bottom) / 2;
+      const delta = center - (box.y + box.height / 2);
+      if (Math.abs(delta) < 0.5) return;
+      // Section labels are positioned by a y attribute (Mermaid) that the wrapped
+      // two-line tspans inherit, so shifting y moves the whole block; fall back to
+      // a transform if some build ever drops the attribute.
+      const y = parseFloat(label.getAttribute('y'));
+      if (Number.isFinite(y)) {
+        label.setAttribute('y', String(y + delta));
+      } else {
+        const prev = label.getAttribute('transform');
+        label.setAttribute('transform', `${prev ? prev + ' ' : ''}translate(0, ${delta})`);
+      }
+    });
+  }
+
   // Global (grouped) view: each project is one Mermaid section (global.js sets
   // every task's `assignee` to its project title), so draw a faint horizontal
   // rule between consecutive project bands. We derive each band's vertical extent
@@ -452,7 +590,9 @@
     svg.querySelectorAll(`rect[id^="${CSS.escape(renderId)}-"]`).forEach((rect) => {
       const task = byId.get(rect.id.slice(prefix.length));
       if (!task) return;
-      const y = parseFloat(rect.getAttribute('y'));
+      // centerTaskRows nudged the bars down via a group transform, leaving their
+      // y attributes untouched; add that shift so the rules land in the real gaps.
+      const y = parseFloat(rect.getAttribute('y')) + lastTaskShiftY;
       const h = parseFloat(rect.getAttribute('height')) || 0;
       if (!Number.isFinite(y)) return;
       const key = task.assignee || '';
@@ -637,6 +777,47 @@
     return (ms) => LEFT_PADDING + ((ms - base) / DAY) * px;
   }
 
+  // Read the rendered date axis: the gridlines' shared vertical extent
+  // (yTop..yBot, absolute SVG units) and each tick's x. The month rules and the
+  // faint day rules both hang on this — to span exactly the gridline height, and
+  // to snap onto / skip the lines Mermaid already drew. The bottom-axis gridlines
+  // live in a `.grid` group translated down to the axis line (y = chartHeight -
+  // 50); d3 draws each tick line from an IMPLICIT y1=0 up to a negative y2 (the
+  // tickSize), so we read a tick's RENDERED box (getBBox captures the implicit y1)
+  // and add the group's translateY to land in absolute SVG coords. Reading the
+  // raw y1/y2 attributes doesn't work — d3 omits y1, leaving only the single y2,
+  // which collapses yTop===yBot into a zero-length (invisible) line. Each d3 tick
+  // is a <g transform="translate(x,0)"> wrapping the gridline, so the line's x
+  // lives in the group transform (its own x1/x2 are local). Falls back to the
+  // whole region above the bottom axis when the grid can't be measured (e.g.
+  // rendered hidden).
+  function measureGrid(svg) {
+    const grid = svg.querySelector('.grid');
+    let yTop = Infinity;
+    let yBot = -Infinity;
+    const tickXs = [];           // rendered gridline x's (SVG units), to snap onto
+    if (grid) {
+      const tl = grid.transform.baseVal;
+      const gx = tl && tl.numberOfItems ? tl.getItem(0).matrix.e : 0;
+      const ty = tl && tl.numberOfItems ? tl.getItem(0).matrix.f : 0;
+      grid.querySelectorAll('.tick').forEach((tick) => {
+        const ln = tick.querySelector('line');
+        if (!ln) return;
+        let bb;
+        try { bb = ln.getBBox(); } catch (_) { return; }
+        yTop = Math.min(yTop, ty + bb.y);
+        yBot = Math.max(yBot, ty + bb.y + bb.height);
+        const tt = tick.transform.baseVal;
+        if (tt && tt.numberOfItems) tickXs.push(gx + tt.getItem(0).matrix.e);
+      });
+    }
+    if (!Number.isFinite(yTop) || !Number.isFinite(yBot) || yBot - yTop < 4) {
+      yTop = 0;
+      yBot = baseH - AXIS_LINE_FROM_BOTTOM;
+    }
+    return { grid, yTop, yBot, tickXs };
+  }
+
   // A 2px vertical rule inside the chart at the first of each month, drawn behind
   // the task bars so multi-month timelines segment visibly into months (the
   // day/week gridlines alone give no monthly cue). Lives in SVG units like the
@@ -654,40 +835,8 @@
     const toX = buildDateToX(targetEl);
     if (!toX) return;
 
-    // Span the lines over the same vertical extent as Mermaid's gridlines. The
-    // bottom-axis gridlines live in a `.grid` group translated down to the axis
-    // line (y = chartHeight - 50); d3 draws each tick line from an IMPLICIT y1=0
-    // up to a negative y2 (the tickSize). So we read a tick's RENDERED box
-    // (getBBox captures the implicit y1) and add the group's translateY to land
-    // in absolute SVG coords. Reading the raw y1/y2 attributes doesn't work — d3
-    // omits y1, leaving only the single y2 value, which collapses yTop===yBot
-    // into a zero-length (invisible) line. Fall back to the whole region above
-    // the bottom axis when the grid can't be measured (e.g. rendered hidden).
-    const grid = svg.querySelector('.grid');
-    let yTop = Infinity;
-    let yBot = -Infinity;
-    const tickXs = [];           // rendered gridline x's (SVG units), to snap onto
-    if (grid) {
-      const tl = grid.transform.baseVal;
-      const gx = tl && tl.numberOfItems ? tl.getItem(0).matrix.e : 0;
-      const ty = tl && tl.numberOfItems ? tl.getItem(0).matrix.f : 0;
-      // Each d3 tick is a <g transform="translate(x,0)"> wrapping the gridline, so
-      // the line's x lives in the group transform (the line's own x1/x2 are local).
-      grid.querySelectorAll('.tick').forEach((tick) => {
-        const ln = tick.querySelector('line');
-        if (!ln) return;
-        let bb;
-        try { bb = ln.getBBox(); } catch (_) { return; }
-        yTop = Math.min(yTop, ty + bb.y);
-        yBot = Math.max(yBot, ty + bb.y + bb.height);
-        const tt = tick.transform.baseVal;
-        if (tt && tt.numberOfItems) tickXs.push(gx + tt.getItem(0).matrix.e);
-      });
-    }
-    if (!Number.isFinite(yTop) || !Number.isFinite(yBot) || yBot - yTop < 4) {
-      yTop = 0;
-      yBot = baseH - AXIS_LINE_FROM_BOTTOM;
-    }
+    // Span the lines over the same vertical extent as Mermaid's gridlines.
+    const { grid, yTop, yBot, tickXs } = measureGrid(svg);
 
     // toX is a 2-point linear fit of d3's date scale, so a boundary can land a
     // hair off the gridline d3 actually drew — the rule then reads as a faint
@@ -720,6 +869,59 @@
     if (!group.childNodes.length) return;
     // After `.grid` so the rules sit over the gridlines/section bands but before
     // the task bars that follow in document order, which paint on top.
+    if (grid && grid.nextSibling) grid.parentNode.insertBefore(group, grid.nextSibling);
+    else if (grid) grid.parentNode.appendChild(group);
+    else svg.appendChild(group);
+  }
+
+  // Faint vertical rule on every day the axis doesn't already mark, so a chart on
+  // weekly (or coarser) ticks still shows where each day falls between the
+  // labelled dates — e.g. a weekly axis labels the Sundays, and these fill in the
+  // six days between. Lives in SVG units like the month rules, so it scales with
+  // zoom for free, and is calibrated with the same date->x map. Skipped on the
+  // densest scales (px < DAY_LINE_MIN_PX), where a line every day would smear into
+  // a grey wash and the month rules carry the structure alone. Days that coincide
+  // with a gridline Mermaid already drew (the weekly Sundays) are left to it so we
+  // don't thicken them.
+  function addDayGridlines(targetEl) {
+    const svg = targetEl.querySelector('svg');
+    if (!svg || !lastSpan || !baseH) return;
+    const { minMs, maxMs } = lastSpan;
+    if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) return;
+    const axis = axisFor(lastSpan.days);
+    if (axis.tickInterval === '1day' || axis.px < DAY_LINE_MIN_PX) return;
+    const toX = buildDateToX(targetEl);
+    if (!toX) return;
+
+    const { grid, yTop, yBot, tickXs } = measureGrid(svg);
+    const SNAP_PX = 6; // a day within this of a tick IS that tick — don't redraw
+
+    const group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('class', 'gantt-day-lines');
+    // Walk local midnights across the span (setDate stays on the day boundary
+    // through DST, unlike adding a fixed 86.4M ms).
+    const cur = new Date(minMs);
+    cur.setHours(0, 0, 0, 0);
+    for (; cur.getTime() <= maxMs; cur.setDate(cur.getDate() + 1)) {
+      const ms = cur.getTime();
+      if (ms < minMs) continue;
+      const x = toX(ms);
+      if (!Number.isFinite(x)) continue;
+      let onTick = false;
+      for (const tx of tickXs) { if (Math.abs(tx - x) <= SNAP_PX) { onTick = true; break; } }
+      if (onTick) continue;
+      const line = document.createElementNS(SVG_NS, 'line');
+      line.setAttribute('class', 'gantt-day-line');
+      line.setAttribute('x1', String(x));
+      line.setAttribute('x2', String(x));
+      line.setAttribute('y1', String(yTop));
+      line.setAttribute('y2', String(yBot));
+      group.appendChild(line);
+    }
+    if (!group.childNodes.length) return;
+    // Insert right after `.grid` too: addMonthBoundaries already put its group
+    // there, so this lands BETWEEN `.grid` and the month rules — the faint day
+    // lines paint beneath the heavier month rules (and both beneath the bars).
     if (grid && grid.nextSibling) grid.parentNode.insertBefore(group, grid.nextSibling);
     else if (grid) grid.parentNode.appendChild(group);
     else svg.appendChild(group);

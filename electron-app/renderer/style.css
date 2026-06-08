@@ -886,6 +886,14 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
   stroke-width: 2px;
   shape-rendering: crispEdges;
 }
+/* Faint vertical rule on each unlabelled day (see addDayGridlines). Lighter than
+   the #e2e2e2 day/week gridlines so the labelled dates still read as the stronger
+   lines and these sit as a subtle in-between grid. */
+#gantt-render .gantt-day-line, #global-gantt-render .gantt-day-line {
+  stroke: #ededed;
+  stroke-width: 1px;
+  shape-rendering: crispEdges;
+}
 /* Faint rules between the per-project bands in the global (grouped) timeline. */
 #global-gantt-render .gantt-group-sep {
   stroke: #ececec;
@@ -1011,14 +1019,14 @@ rect.task.gantt-clickable:hover { filter: brightness(0.94); }
 #prompt-actions .primary:hover { background: #2e8fd2; }
 
 /* ---- new-project prompt (name + profile) ---- */
-#newproj-backdrop {
+#newproj-backdrop, #reschedule-backdrop {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.28);
   display: flex; align-items: center; justify-content: center;
   z-index: 210;
 }
-#newproj-backdrop[hidden] { display: none; }
-#newproj-modal {
+#newproj-backdrop[hidden], #reschedule-backdrop[hidden] { display: none; }
+#newproj-modal, #reschedule-modal {
   width: 340px;
   max-width: calc(100vw - 40px);
   background: #fff;
@@ -1026,14 +1034,14 @@ rect.task.gantt-clickable:hover { filter: brightness(0.94); }
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
   padding: 20px;
 }
-#newproj-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 14px; }
+#newproj-title, #reschedule-title { font-size: 16px; font-weight: 600; color: #2a2a2a; margin-bottom: 14px; }
 .newproj-label {
   display: block;
   font-size: 12px; font-weight: 600; color: #6a6a6a;
   margin: 0 0 5px 2px;
 }
 .newproj-label:nth-of-type(2) { margin-top: 12px; }
-#newproj-name, #newproj-profile {
+#newproj-name, #newproj-profile, #reschedule-name, #reschedule-task, #reschedule-date {
   width: 100%;
   font: inherit;
   font-size: 14px;
@@ -1043,16 +1051,36 @@ rect.task.gantt-clickable:hover { filter: brightness(0.94); }
   outline: none;
   background: #fff;
 }
-#newproj-name:focus, #newproj-profile:focus { border-color: #89cff0; box-shadow: 0 0 0 2px rgba(137, 207, 240, 0.3); }
-#newproj-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-#newproj-actions button {
+#newproj-name:focus, #newproj-profile:focus,
+#reschedule-name:focus, #reschedule-task:focus, #reschedule-date:focus {
+  border-color: #89cff0; box-shadow: 0 0 0 2px rgba(137, 207, 240, 0.3);
+}
+/* Caption that introduces the anchor radios — explains what the dialog does.
+   Matches the field-label look (.newproj-label) with extra top spacing. */
+#reschedule-caption {
+  font-size: 12px; font-weight: 600; color: #6a6a6a;
+  margin: 14px 0 6px 2px;
+}
+/* Anchor radios for the reschedule dialog: a tidy vertical stack with
+   normal-weight labels (the .newproj-label styling above is for field labels). */
+.reschedule-anchor { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
+.reschedule-anchor label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; color: #2a2a2a; cursor: pointer;
+}
+.reschedule-anchor input { margin: 0; }
+/* Leave room for the .date-field calendar button (styled globally below) so the
+   icon doesn't overlap the typed date — mirrors #task-form's #f-start rule. */
+#reschedule-date { padding-right: 34px; }
+#newproj-actions, #reschedule-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+#newproj-actions button, #reschedule-actions button {
   font: inherit; font-size: 14px;
   padding: 7px 16px; border-radius: 6px;
   border: 1px solid #cfcfcf; background: #fff; color: #333; cursor: pointer;
 }
-#newproj-actions button:hover { background: #f3f3f3; }
-#newproj-actions .primary { background: #3f9fe0; border-color: #3f9fe0; color: #fff; font-weight: 600; }
-#newproj-actions .primary:hover { background: #2e8fd2; }
+#newproj-actions button:hover, #reschedule-actions button:hover { background: #f3f3f3; }
+#newproj-actions .primary, #reschedule-actions .primary { background: #3f9fe0; border-color: #3f9fe0; color: #fff; font-weight: 600; }
+#newproj-actions .primary:hover, #reschedule-actions .primary:hover { background: #2e8fd2; }
 
 /* ---- modal ---- */
 #modal-backdrop {

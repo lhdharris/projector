@@ -1264,50 +1264,26 @@
   }
 
   // ---- import / duplicate with date-shift ------------------------------
-  // Earliest concrete (YYYY-MM-DD) start across the model, or null. ISO date
-  // strings sort lexicographically, so a string compare gives the min date.
-  function earliestStart(model) {
-    let min = null;
-    for (const t of model.tasks) {
-      if (t.start && P.DATE_RE.test(t.start) && (min === null || t.start < min)) min = t.start;
-    }
-    return min;
-  }
+  // Whole-day signed distance between two ISO dates. Used to turn a chosen
+  // anchor date into the uniform offset applied across the project.
   function daysBetween(aISO, bISO) {
     return Math.round((Date.parse(bISO + 'T00:00:00') - Date.parse(aISO + 'T00:00:00')) / 86400000);
   }
-  // Re-prompt until the user enters a valid YYYY-MM-DD date, or cancels (null).
-  async function promptDate(titleText, initial) {
-    let init = initial;
-    for (;;) {
-      const v = await promptText(titleText, init, 'Create');
-      if (v === null) return null;
-      const s = v.trim();
-      if (P.DATE_RE.test(s)) return s;
-      window.alert('Please enter the date as YYYY-MM-DD.');
-      init = s;
-    }
-  }
 
-  // Create a new project in destDir from sourceMd, shifted to a user-chosen
-  // start: every absolute task date moves by the same offset (durations and
-  // relative "after" gaps preserved), all tasks become unassigned and reset to
-  // To Do, and it's tagged with the active profile. Used by both import and
-  // duplicate.
-  async function importProjectInto(destDir, sourceMd, defaultTitle) {
+  // Create a new project in destDir from sourceMd, re-based on a user-chosen
+  // anchor (project start, project end, or a specific task pinned to a date):
+  // every absolute task date moves by the same offset (durations and relative
+  // "after" gaps preserved), all tasks become unassigned and reset to To Do,
+  // and it's tagged with the active profile. Used by both import and duplicate.
+  async function importProjectInto(destDir, sourceMd, defaultTitle, titleText) {
     const model = P.parseGantt(P.extractMermaidBlock(sourceMd).code);
     if (!model.tasks.length) { window.alert('That file has no tasks to import.'); return; }
 
-    const titleInput = await promptText('Import as…', defaultTitle, 'Continue');
-    if (titleInput === null) return;
-    const title = titleInput.trim() || defaultTitle;
+    const res = await promptReschedule(model, defaultTitle, titleText);
+    if (res === null) return;
+    const title = res.title.trim() || defaultTitle;
+    const offset = res.offset;
 
-    const oldStart = earliestStart(model);
-    const dateTitle = oldStart ? `New start date (was ${oldStart})` : 'New start date (YYYY-MM-DD)';
-    const newStart = await promptDate(dateTitle, oldStart || P.todayISO());
-    if (newStart === null) return;
-
-    const offset = oldStart ? daysBetween(oldStart, newStart) : 0;
     for (const t of model.tasks) {
       // Shift absolute dates; durations and "after <id>" gaps ride along
       // unchanged. A task may encode its end as a date in place of a duration —
@@ -1334,12 +1310,12 @@
   async function importIntoFolder(folder) {
     const picked = await window.projects.pickImport();
     if (!picked) return;
-    await importProjectInto(folder.path, picked.content, picked.name || 'Imported Project');
+    await importProjectInto(folder.path, picked.content, picked.name || 'Imported Project', 'Import as…');
   }
 
   async function duplicateProject(p) {
     const md = await window.projects.read(p.file);
-    await importProjectInto(p.folderPath, md, `${p.title} (copy)`);
+    await importProjectInto(p.folderPath, md, `${p.title} (copy)`, 'Duplicate with new dates…');
   }
 
   // Choose the workspace for a new project, anchored to the new-project button:
@@ -1594,6 +1570,106 @@
       byId('newproj-cancel').addEventListener('click', onCancel);
       backdrop.addEventListener('mousedown', onBackdrop);
       document.addEventListener('keydown', onKey);
+
+      backdrop.hidden = false;
+      setTimeout(() => { nameInput.focus(); nameInput.select(); }, 0);
+    });
+  }
+
+  // Import / duplicate dialog: a name, a choice of which point in the schedule
+  // to pin (project start, project end, or a specific task), and the date to pin
+  // it to. Every absolute date then shifts by one uniform offset, so the chosen
+  // anchor lands exactly on the picked date while durations and relative "after"
+  // gaps ride along. Resolves { title, offset } on Create, or null if cancelled.
+  function promptReschedule(model, defaultTitle, titleText) {
+    const backdrop = byId('reschedule-backdrop');
+    const nameInput = byId('reschedule-name');
+    const taskSel = byId('reschedule-task');
+    const dateInput = byId('reschedule-date');
+    byId('reschedule-title').textContent = titleText || 'Import as…';
+    nameInput.value = defaultTitle || '';
+
+    // Resolve every task to absolute ms (shared scheduler), then read off the
+    // project's true start/end and each pinnable task's current date.
+    const { startMs, endMs } = P.resolveSchedule(model);
+    const msToISO = (ms) => P.toISO(new Date(ms));
+    const starts = [...startMs.values()];
+    const ends = [...endMs.values()];
+    const minStartISO = starts.length ? msToISO(Math.min(...starts)) : null;
+    const maxEndISO = ends.length ? msToISO(Math.max(...ends)) : null;
+
+    // Pinnable tasks = those that resolved to a concrete start. Milestones get a
+    // ◆ marker since they're the usual thing to pin a schedule around.
+    const taskISO = new Map();
+    taskSel.innerHTML = '';
+    for (const t of model.tasks) {
+      if (!startMs.has(t.id)) continue;
+      taskISO.set(t.id, msToISO(startMs.get(t.id)));
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = (t.milestone ? '◆ ' : '') + t.name;
+      taskSel.appendChild(o);
+    }
+    const taskRadio = backdrop.querySelector('input[name="reschedule-anchor"][value="task"]');
+    taskRadio.disabled = taskSel.options.length === 0;
+
+    // Bind the app calendar popup once; the field stays a plain ISO text input.
+    if (!dateInput.dataset.calBound) { window.DatePicker.attach(dateInput); dateInput.dataset.calBound = '1'; }
+
+    const anchorVal = () => backdrop.querySelector('input[name="reschedule-anchor"]:checked').value;
+    // The current (pre-shift) date of whichever anchor is selected, or null when
+    // nothing in the project resolves to a concrete date.
+    const currentISO = () => {
+      const a = anchorVal();
+      if (a === 'start') return minStartISO;
+      if (a === 'end') return maxEndISO;
+      return taskSel.value ? taskISO.get(taskSel.value) : null;
+    };
+    // Reflect the anchor choice: reveal the task dropdown only for "task", and
+    // seed the date field with that anchor's current date as a starting point.
+    const sync = () => {
+      taskSel.hidden = anchorVal() !== 'task';
+      dateInput.value = currentISO() || P.todayISO();
+    };
+
+    backdrop.querySelector('input[name="reschedule-anchor"][value="start"]').checked = true;
+    sync();
+
+    return new Promise((resolve) => {
+      let done = false;
+      const onAnchor = () => sync();
+      const onTask = () => { dateInput.value = (taskSel.value ? taskISO.get(taskSel.value) : null) || P.todayISO(); };
+      const radios = backdrop.querySelectorAll('input[name="reschedule-anchor"]');
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        backdrop.hidden = true;
+        byId('reschedule-form').removeEventListener('submit', onSubmit);
+        byId('reschedule-cancel').removeEventListener('click', onCancel);
+        backdrop.removeEventListener('mousedown', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        for (const r of radios) r.removeEventListener('change', onAnchor);
+        taskSel.removeEventListener('change', onTask);
+        resolve(val);
+      };
+      const onSubmit = (e) => {
+        e.preventDefault();
+        const newDate = dateInput.value.trim();
+        if (!P.DATE_RE.test(newDate)) { dateInput.focus(); return; }
+        const cur = currentISO();
+        const offset = cur ? daysBetween(cur, newDate) : 0;
+        finish({ title: nameInput.value, offset });
+      };
+      const onCancel = () => finish(null);
+      const onBackdrop = (e) => { if (e.target === backdrop) finish(null); };
+      const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+
+      byId('reschedule-form').addEventListener('submit', onSubmit);
+      byId('reschedule-cancel').addEventListener('click', onCancel);
+      backdrop.addEventListener('mousedown', onBackdrop);
+      document.addEventListener('keydown', onKey);
+      for (const r of radios) r.addEventListener('change', onAnchor);
+      taskSel.addEventListener('change', onTask);
 
       backdrop.hidden = false;
       setTimeout(() => { nameInput.focus(); nameInput.select(); }, 0);
