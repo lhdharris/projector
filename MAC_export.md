@@ -5,11 +5,11 @@ already done: the `v<version>` GitHub release exists with the `.rpm` and `.deb`
 attached. Your job here is to build the **`.dmg`** (macOS) and **`.exe`** (Windows)
 installers and **upload them to that same existing release**.
 
-> **Current target (update this line each release):** as of **2026-06-08** the live
-> release is **`v1.4.2`** — it already has the `.rpm` and `.deb` attached and is
+> **Current target (update this line each release):** as of **2026-06-09** the live
+> release is **`v1.4.3`** — it already has the `.rpm` and `.deb` attached and is
 > flagged *Latest*. You're here to add the `.dmg` (and ideally the `.exe`) to it.
 > The steps below read the version from `package.json`, so they don't need editing;
-> just confirm `node -p "require('./package.json').version"` prints `1.4.2` after
+> just confirm `node -p "require('./package.json').version"` prints `1.4.3` after
 > you pull `main`.
 
 This app is a local-first, Markdown + Mermaid-gantt project planner for self-hosting /
