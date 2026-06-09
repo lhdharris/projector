@@ -555,7 +555,22 @@ async function htmlToPdfBuffer(html) {
       webPreferences: { javascript: false, contextIsolation: true, nodeIntegration: false },
     });
     await win.loadFile(tmp);
-    return await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+    // displayHeaderFooter + a footer template stamps "Page X of Y" in the bottom
+    // @page margin of every physical page. This is the only reliable way to number
+    // the document: the Team / All-tasks pages flow across an unknown number of
+    // pages, so the renderer can't pre-compute a total. An empty header template
+    // suppresses Chromium's default date/title header.
+    return await win.webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true,
+      displayHeaderFooter: true,
+      headerTemplate: '<span></span>',
+      footerTemplate:
+        '<div style="width:100%;font-size:8px;color:#9aa0a6;text-align:center;'
+        + 'font-family:system-ui,-apple-system,\'Segoe UI\',Roboto,sans-serif;'
+        + '-webkit-print-color-adjust:exact;print-color-adjust:exact;">'
+        + 'Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
+    });
   } finally {
     if (win && !win.isDestroyed()) win.destroy();
     fs.rm(tmp, { force: true }, () => {});

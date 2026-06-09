@@ -605,9 +605,10 @@
   // Show the date picker or the "starts after another task" typeahead depending
   // on the scheduling mode chosen in the editor's "Starts" dropdown.
   function syncStartMode() {
-    const after = byId('f-start-mode').value === 'after';
-    byId('f-start-date-row').hidden = after;
-    byId('f-start-after-row').hidden = !after;
+    const mode = byId('f-start-mode').value;
+    byId('f-start-date-row').hidden = mode !== 'date';
+    byId('f-start-after-row').hidden = mode !== 'after';
+    byId('f-start-before-row').hidden = mode !== 'before';
   }
 
   // Fill the "Starts after" typeahead with the other tasks in the model being
@@ -615,7 +616,9 @@
   // typed name can be turned back into an "after <id>" dependency on save.
   function populateAfterList() {
     const dl = byId('after-list');
+    const dlBefore = byId('before-list');
     dl.innerHTML = '';
+    dlBefore.innerHTML = '';
     state.afterNameToId = new Map();
     const tasks = state.editModel ? state.editModel.tasks : [];
     for (const t of tasks) {
@@ -623,9 +626,13 @@
       const name = (t.name || '').trim();
       if (!name || state.afterNameToId.has(name)) continue;
       state.afterNameToId.set(name, t.id);
-      const opt = document.createElement('option');
-      opt.value = name;
-      dl.appendChild(opt);
+      // The "before" typeahead offers the same predecessor candidates and reuses
+      // the same name->id lookup (afterNameToId) when resolving on save.
+      for (const list of [dl, dlBefore]) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        list.appendChild(opt);
+      }
     }
   }
 
@@ -656,6 +663,21 @@
       return P.todayISO();
     }
     return byId('f-start').value.trim() || P.todayISO();
+  }
+
+  // "Before another task": place the new task so it finishes exactly when the
+  // chosen target starts (start = target.start − duration). Mermaid gantt has no
+  // native "before", so we resolve the target's start with the shared scheduler
+  // and store a concrete ISO date. Falls back to today when no/unknown target is
+  // chosen (mirrors the "after" guard) so we never write a dangling reference.
+  function readBeforeStart(durDays) {
+    const typed = byId('f-before').value.trim();
+    const id = state.afterNameToId && state.afterNameToId.get(typed);
+    if (!id) return P.todayISO();
+    const { startMs } = P.resolveSchedule(state.editModel);
+    const tgt = startMs.get(id);
+    if (tgt == null) return P.todayISO();
+    return P.addDays(P.toISO(new Date(tgt)), -Math.max(0, durDays));
   }
 
   // Rosters are scoped to a profile so the user can keep a separate "Household"
@@ -1009,6 +1031,7 @@
     byId('f-after').value = afterName;
     byId('f-after').dataset.orig = isAfter ? (t.start || '') : '';
     byId('f-after').dataset.origName = afterName;
+    byId('f-before').value = '';
     syncStartMode();
     byId('f-duration').value = Math.max(0, Math.round(P.parseDurationDays(t.duration)));
     byId('f-status').value = t.status;
@@ -1042,6 +1065,7 @@
     byId('f-after').value = '';
     byId('f-after').dataset.orig = '';
     byId('f-after').dataset.origName = '';
+    byId('f-before').value = '';
     syncStartMode();
     byId('f-duration').value = 3;
     byId('f-status').value = status || 'todo';
@@ -1169,8 +1193,11 @@
     const milestone = byId('f-milestone').checked;
     const durDays = Math.max(0, parseInt(byId('f-duration').value, 10) || 0);
 
-    // "On a date" -> ISO date; "After another task" -> "after <id>".
-    const start = readStartValue();
+    // "On a date" -> ISO date; "After another task" -> "after <id>"; "Before
+    // another task" -> a fixed ISO date computed back from the target's start.
+    const start = byId('f-start-mode').value === 'before'
+      ? readBeforeStart(milestone ? 0 : durDays)
+      : readStartValue();
 
     const duration = milestone ? '0d' : `${durDays || 1}d`;
     const status = byId('f-status').value;
@@ -2308,6 +2335,7 @@
     byId('pdf-forecast-on').checked = true;
     byId('pdf-team-on').checked = true;
     byId('pdf-global-on').checked = true;
+    byId('pdf-team-alltasks').checked = false;
     byId('pdf-forecast-days').value = '7';
     byId('pdf-team-days').value = '7';
     byId('pdf-global-past').value = 'none';
@@ -2317,6 +2345,7 @@
     const letter = document.querySelector('input[name="pdf-paper"][value="Letter"]');
     if (letter) letter.checked = true;
     syncPdfDays();
+    syncPdfTeamSub();
     syncPdfGlobal();
     syncPdfGlobalRange();
     renderPdfFolder();
@@ -2349,6 +2378,23 @@
       inp.checked = only ? (p.file === only) : true;
       box.appendChild(row);
     }
+  }
+
+  // Bulk toggle for the project checklist, wired to the Select/Deselect all
+  // buttons above it.
+  function setAllPdfProjects(on) {
+    byId('pdf-projects').querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = on; });
+    syncPdfExport();
+  }
+
+  // The "All tasks" page is a sub-option of the Team page, so grey it out (and
+  // ignore it on export) whenever the Team page itself is off.
+  function syncPdfTeamSub() {
+    const on = byId('pdf-team-on').checked;
+    const sub = byId('pdf-team-alltasks');
+    sub.disabled = !on;
+    const row = sub.closest('.pdf-subopt');
+    if (row) row.classList.toggle('disabled', !on);
   }
 
   // Team shares the forecast's window when both are on; otherwise it gets its
@@ -2411,7 +2457,7 @@
     const forecast = { on: byId('pdf-forecast-on').checked, days: clampDays(byId('pdf-forecast-days').value) };
     const teamOn = byId('pdf-team-on').checked;
     const teamDays = forecast.on ? forecast.days : clampDays(byId('pdf-team-days').value);
-    const team = { on: teamOn, days: teamDays };
+    const team = { on: teamOn, days: teamDays, allTasks: teamOn && byId('pdf-team-alltasks').checked };
     const globalOn = byId('pdf-global-on').checked;
     if (!forecast.on && !team.on && !globalOn) return;
 
@@ -2466,9 +2512,11 @@
   }
 
   byId('pdf-forecast-on').addEventListener('change', () => { syncPdfDays(); syncPdfExport(); });
-  byId('pdf-team-on').addEventListener('change', syncPdfExport);
+  byId('pdf-team-on').addEventListener('change', () => { syncPdfTeamSub(); syncPdfExport(); });
   byId('pdf-global-on').addEventListener('change', () => { syncPdfGlobal(); syncPdfExport(); });
   byId('pdf-projects').addEventListener('change', syncPdfExport);
+  byId('pdf-projects-all').addEventListener('click', () => setAllPdfProjects(true));
+  byId('pdf-projects-none').addEventListener('click', () => setAllPdfProjects(false));
   byId('pdf-global-past').addEventListener('change', syncPdfGlobalRange);
   byId('pdf-global-future').addEventListener('change', syncPdfGlobalRange);
   byId('pdf-folder-btn').addEventListener('click', async () => {

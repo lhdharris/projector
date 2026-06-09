@@ -1,30 +1,29 @@
-# Projector v1.4.2
+# Projector v1.4.3
 
 A local-first project & **team** planner built on plain Markdown + Mermaid gantt
 charts. Every project is just a `.md` file in a folder you control — no cloud
 account, no subscription, no server.
 
-A Timeline-readability and rescheduling release on top of v1.4.1.
+A PDF-export and task-scheduling release on top of v1.4.2.
 
-## Timeline & Gantt
-- **A faint gridline on every day.** Weekly- and monthly-tick charts now draw a
-  light rule on each unlabelled day, so you can see exactly where a day falls
-  between the dated ticks instead of guessing.
-- **Bars and titles sit centred in their rows.** Task bars, labels and milestone
-  diamonds are now vertically centred in each row band rather than riding high
-  with dead space below — so single-task bands and dense charts both read cleanly.
-- **Weekday labels on weekly charts.** In the weekly-tick regime the bottom axis
-  now reads **`Sun 07`, `Sun 14`, …** (weekday + day) instead of repeating the
-  month that's already in the sticky top header — confirming that each gridline
-  lands on a Sunday week boundary.
+## PDF export
+- **Page numbers on every page.** Exported PDFs now stamp a **`Page X of Y`**
+  footer on every physical page, so a printed Team or All-tasks list that flows
+  across several pages stays in order and nothing goes missing.
+- **"All tasks" page.** A new sub-option of the Team page adds a single
+  page-flowing list of **every task in scope with its assignee** on the right —
+  handy as a master checklist alongside the per-person breakdown.
+- **Overdue tasks carry over on the Team page.** Any incomplete task whose
+  deadline has already passed is kept on each person's list (sorted to the top and
+  flagged **overdue** in red) instead of silently dropping off once its week ends.
+- **Select all / Deselect all** buttons over the project checklist, so picking
+  which projects to include is one click when you have many.
 
-## Import / Duplicate with new dates
-- **Anchor the new timeline on any fixed point.** "Import as…" and "Duplicate
-  with new dates…" now let you choose what stays put: the **project start date**,
-  the **project end date**, or **a specific task** (e.g. a milestone). Pick the
-  anchor, set its date, and every other task shifts by the same offset — durations
-  and relative ("after") gaps are preserved, so you can rebase a whole plan around
-  the one date that's actually fixed.
+## Scheduling
+- **"Before another task" start mode.** Alongside "On a date" and "After another
+  task", the task editor can now place a task so it **finishes exactly when a
+  chosen task starts** — set the duration and the start date is computed back from
+  the target. Ideal for prep work that must wrap up before a milestone or handoff.
 
 ## Highlights (carried over from v1.4)
 - **Export to PDF**, **PIN + QR-gated local share**, **automatic update checks**,
@@ -38,10 +37,10 @@ A Timeline-readability and rescheduling release on top of v1.4.1.
 ## Downloads
 | Platform | File |
 |---|---|
-| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.4.2.x86_64.rpm` — `sudo rpm -i …` |
-| Debian/Ubuntu (DEB) | `projector-app_1.4.2_amd64.deb` — `sudo dpkg -i …` |
-| macOS (DMG) | `Projector-1.4.2.dmg` *(added once built on a Mac)* |
-| Windows (EXE) | `Projector Setup 1.4.2.exe` *(added once built on a Mac)* |
+| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.4.3.x86_64.rpm` — `sudo rpm -i …` |
+| Debian/Ubuntu (DEB) | `projector-app_1.4.3_amd64.deb` — `sudo dpkg -i …` |
+| macOS (DMG) | `Projector-1.4.3.dmg` *(added once built on a Mac)* |
+| Windows (EXE) | `Projector Setup 1.4.3.exe` *(added once built on a Mac)* |
 
 > These builds are **unsigned**. macOS: right-click → **Open** (or
 > `xattr -dr com.apple.quarantine /Applications/Projector.app`). Windows
