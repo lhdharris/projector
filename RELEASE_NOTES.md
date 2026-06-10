@@ -1,29 +1,40 @@
-# Projector v1.4.3
+# Projector v1.4.4
 
 A local-first project & **team** planner built on plain Markdown + Mermaid gantt
 charts. Every project is just a `.md` file in a folder you control — no cloud
 account, no subscription, no server.
 
-A PDF-export and task-scheduling release on top of v1.4.2.
+A PDF-export, ordering, and scheduling refinement release on top of v1.4.3.
 
 ## PDF export
-- **Page numbers on every page.** Exported PDFs now stamp a **`Page X of Y`**
-  footer on every physical page, so a printed Team or All-tasks list that flows
-  across several pages stays in order and nothing goes missing.
-- **"All tasks" page.** A new sub-option of the Team page adds a single
-  page-flowing list of **every task in scope with its assignee** on the right —
-  handy as a master checklist alongside the per-person breakdown.
-- **Overdue tasks carry over on the Team page.** Any incomplete task whose
-  deadline has already passed is kept on each person's list (sorted to the top and
-  flagged **overdue** in red) instead of silently dropping off once its week ends.
-- **Select all / Deselect all** buttons over the project checklist, so picking
-  which projects to include is one click when you have many.
+- **Upcoming milestones with your forecast.** The Forecast page now lists **every
+  forthcoming milestone** across the included projects (any date from today on, not
+  just those inside the forecast window). It folds in as a section right under the
+  forecast when there's room, and spills onto its own page when there isn't.
+- **Matching forecast footer.** The Forecast page footer now reads exactly like the
+  Team page footer — generated-date and scope on the left, attribution on the right,
+  under a single thin rule.
+- **Cleaner overdue tasks on the Team page.** Instead of a separate "overdue" badge,
+  an overdue carry-over now shows its **name in italic red** and its **date bracketed
+  in red** — the urgency reads at a glance without the extra chip.
+
+## Ordering
+- **"Next up" first, everywhere.** Kanban columns and Team columns now sort by
+  **soonest deadline first**, so the most imminent work sits at the top and the
+  farthest-out at the bottom. The Team view additionally **pins critical tasks to the
+  top** and **sinks Done to the bottom**.
 
 ## Scheduling
-- **"Before another task" start mode.** Alongside "On a date" and "After another
-  task", the task editor can now place a task so it **finishes exactly when a
-  chosen task starts** — set the duration and the start date is computed back from
-  the target. Ideal for prep work that must wrap up before a milestone or handoff.
+- **"Before a date" start mode.** Alongside "On a date", "After another task", and
+  "Before another task", you can now place a task so it **finishes on a chosen date** —
+  set the duration and the start is computed back from that deadline. Milestones land
+  exactly on the date.
+
+## Export dialog
+- **Pick projects across every profile.** The Export-to-PDF project checklist now lists
+  projects from **all profiles**, grouped under a header per profile (plus "No profile"),
+  so a single PDF can span more than one profile. The active profile's projects are
+  pre-checked; the rest are one click away.
 
 ## Highlights (carried over from v1.4)
 - **Export to PDF**, **PIN + QR-gated local share**, **automatic update checks**,
@@ -37,10 +48,10 @@ A PDF-export and task-scheduling release on top of v1.4.2.
 ## Downloads
 | Platform | File |
 |---|---|
-| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.4.3.x86_64.rpm` — `sudo rpm -i …` |
-| Debian/Ubuntu (DEB) | `projector-app_1.4.3_amd64.deb` — `sudo dpkg -i …` |
-| macOS (DMG) | `Projector-1.4.3.dmg` *(added once built on a Mac)* |
-| Windows (EXE) | `Projector Setup 1.4.3.exe` *(added once built on a Mac)* |
+| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.4.4.x86_64.rpm` — `sudo rpm -i …` |
+| Debian/Ubuntu (DEB) | `projector-app_1.4.4_amd64.deb` — `sudo dpkg -i …` |
+| macOS (DMG) | `Projector-1.4.4.dmg` *(added once built on a Mac)* |
+| Windows (EXE) | `Projector Setup 1.4.4.exe` *(added once built on a Mac)* |
 
 > These builds are **unsigned**. macOS: right-click → **Open** (or
 > `xattr -dr com.apple.quarantine /Applications/Projector.app`). Windows

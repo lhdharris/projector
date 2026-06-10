@@ -1,8 +1,8 @@
 // Team view: one column per assignee (a "to-do list" per person), with that
-// person's tasks colour-coded by project and ordered by status then urgency —
-// in-progress on top, to-do in the middle, done sinking to the bottom; within a
-// status, critical first then soonest deadline. Unassigned tasks collect in a
-// final "Unassigned" column. Dragging a card onto another column reassigns it.
+// person's tasks colour-coded by project and ordered with critical tasks pinned
+// to the top, then by soonest deadline (next up first), with done tasks sinking
+// to the bottom. Unassigned tasks collect in a final "Unassigned" column.
+// Dragging a card onto another column reassigns it.
 //
 // This shares the Kanban's column/card chrome but, unlike the Kanban (columns
 // = status), here columns = people, so each card carries a small status tag and
@@ -17,8 +17,6 @@
     active: { label: 'In Progress' },
     done:   { label: 'Done' },
   };
-  // Where each status lands within a person's column.
-  const STATUS_RANK = { active: 0, todo: 1, done: 2 };
   // Pause before a status change shuffles the card to its new slot, so the move
   // reads as deliberate rather than an instant jump.
   const MOVE_DELAY_MS = 320;
@@ -64,12 +62,11 @@
     return `Starts after ${quoted.join(', ')} and ${last} are finished`;
   }
 
-  // Status band first (in-progress → to-do → done), then critical, then soonest
-  // deadline, then by name for stability.
+  // Critical pinned to the top, then soonest deadline (next up first), with Done
+  // sinking to the bottom; name breaks ties for stability.
   function compareTasks(a, b) {
-    const ra = STATUS_RANK[a.status] ?? 1;
-    const rb = STATUS_RANK[b.status] ?? 1;
-    if (ra !== rb) return ra - rb;
+    const da = a.status === 'done', db = b.status === 'done';
+    if (da !== db) return da ? 1 : -1;
     if (!!a.crit !== !!b.crit) return a.crit ? -1 : 1;
     const ea = endMs(a), eb = endMs(b);
     if (ea !== eb) return ea - eb;

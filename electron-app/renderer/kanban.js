@@ -20,6 +20,24 @@
     return h;
   }
 
+  // End timestamp for "soonest first" ordering. Undated / "after <id>" tasks have
+  // no resolvable deadline, so they sort last (mirrors team.js endMs).
+  function endMs(task) {
+    const P = global.GanttParse;
+    if (!task.start || !P.DATE_RE.test(task.start)) return Infinity;
+    const startMs = Date.parse(task.start + 'T00:00:00');
+    if (Number.isNaN(startMs)) return Infinity;
+    if (task.milestone) return startMs;
+    const dur = Math.max(0, P.parseDurationDays(task.duration));
+    return startMs + dur * 86400000;
+  }
+
+  // Within a column the next-up task sits at the top and the farthest-away at the
+  // bottom; undated tasks fall to the end, name breaks ties.
+  function byDeadline(a, b) {
+    return endMs(a) - endMs(b) || String(a.name || '').localeCompare(String(b.name || ''));
+  }
+
   function dateRange(task, nameById) {
     const start = (task.start || '').trim();
     if (!start) return '';
@@ -63,7 +81,7 @@
       colEl.className = 'kanban-col';
       colEl.dataset.status = col.key;
 
-      const tasks = model.tasks.filter((t) => t.status === col.key);
+      const tasks = model.tasks.filter((t) => t.status === col.key).sort(byDeadline);
 
       const head = document.createElement('div');
       head.className = 'kanban-col-head';

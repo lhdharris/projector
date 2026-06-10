@@ -395,6 +395,8 @@
           <div class="pdf-opt-desc">A focused timeline of just the next
             <input type="number" id="pdf-forecast-days" class="pdf-days" min="1" max="120" value="7"> days,
             so the meeting can be about a specific window.</div>
+          <label class="pdf-subopt"><input type="checkbox" id="pdf-forecast-milestones" checked>
+            Add an “Upcoming milestones” page — all forthcoming milestones in the included projects.</label>
         </div>
       </div>
 
@@ -484,6 +486,7 @@
               <option value="date">On a date</option>
               <option value="after">After another task</option>
               <option value="before">Before another task</option>
+              <option value="before-date">Before a date</option>
             </select>
           </label>
           <label>Duration (days)<input type="number" id="f-duration" min="0" step="1" value="3"></label>
@@ -508,6 +511,19 @@
         <label id="f-start-before-row" hidden>Starts before
           <input type="text" id="f-before" list="before-list" autocomplete="off" placeholder="Type a task name…">
           <datalist id="before-list"></datalist>
+        </label>
+        <label id="f-start-beforedate-row" hidden>Finish on
+          <span class="date-field">
+            <input type="text" id="f-beforedate" autocomplete="off" inputmode="numeric" placeholder="YYYY-MM-DD">
+            <button type="button" id="f-beforedate-cal" class="date-cal-btn" tabindex="-1" aria-label="Open calendar">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                <rect x="2" y="3" width="12" height="11" rx="2"></rect>
+                <line x1="2" y1="6.5" x2="14" y2="6.5"></line>
+                <line x1="5.5" y1="1.6" x2="5.5" y2="4"></line>
+                <line x1="10.5" y1="1.6" x2="10.5" y2="4"></line>
+              </svg>
+            </button>
+          </span>
         </label>
         <label>Status
           <select id="f-status">

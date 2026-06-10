@@ -572,6 +572,7 @@
   byId('f-delete').addEventListener('click', onDeleteTask);
   byId('task-form').addEventListener('submit', onSaveTask);
   window.DatePicker.attach(byId('f-start')); // app-themed calendar popup
+  window.DatePicker.attach(byId('f-beforedate')); // "Before a date" deadline field
   byId('f-start-mode').addEventListener('change', syncStartMode);
   // New task: re-point the editor at the chosen project. Editing: the dropdown is
   // just a move destination, read at save time — don't repoint off the source.
@@ -609,6 +610,7 @@
     byId('f-start-date-row').hidden = mode !== 'date';
     byId('f-start-after-row').hidden = mode !== 'after';
     byId('f-start-before-row').hidden = mode !== 'before';
+    byId('f-start-beforedate-row').hidden = mode !== 'before-date';
   }
 
   // Fill the "Starts after" typeahead with the other tasks in the model being
@@ -678,6 +680,15 @@
     const tgt = startMs.get(id);
     if (tgt == null) return P.todayISO();
     return P.addDays(P.toISO(new Date(tgt)), -Math.max(0, durDays));
+  }
+
+  // "Before a date": the task finishes on the chosen date and starts its duration
+  // earlier (start = date − duration), so it reads as a deadline. Stored as a
+  // concrete ISO date; falls back to today when no valid date is entered.
+  function readBeforeDateStart(durDays) {
+    const d = byId('f-beforedate').value.trim();
+    if (!P.DATE_RE.test(d)) return P.todayISO();
+    return P.addDays(d, -Math.max(0, durDays));
   }
 
   // Rosters are scoped to a profile so the user can keep a separate "Household"
@@ -1032,6 +1043,7 @@
     byId('f-after').dataset.orig = isAfter ? (t.start || '') : '';
     byId('f-after').dataset.origName = afterName;
     byId('f-before').value = '';
+    byId('f-beforedate').value = '';
     syncStartMode();
     byId('f-duration').value = Math.max(0, Math.round(P.parseDurationDays(t.duration)));
     byId('f-status').value = t.status;
@@ -1066,6 +1078,7 @@
     byId('f-after').dataset.orig = '';
     byId('f-after').dataset.origName = '';
     byId('f-before').value = '';
+    byId('f-beforedate').value = '';
     syncStartMode();
     byId('f-duration').value = 3;
     byId('f-status').value = status || 'todo';
@@ -1194,9 +1207,11 @@
     const durDays = Math.max(0, parseInt(byId('f-duration').value, 10) || 0);
 
     // "On a date" -> ISO date; "After another task" -> "after <id>"; "Before
-    // another task" -> a fixed ISO date computed back from the target's start.
-    const start = byId('f-start-mode').value === 'before'
-      ? readBeforeStart(milestone ? 0 : durDays)
+    // another task" -> ISO date computed back from the target's start; "Before a
+    // date" -> ISO date computed back from the chosen deadline.
+    const startMode = byId('f-start-mode').value;
+    const start = startMode === 'before' ? readBeforeStart(milestone ? 0 : durDays)
+      : startMode === 'before-date' ? readBeforeDateStart(milestone ? 0 : durDays)
       : readStartValue();
 
     const duration = milestone ? '0d' : `${durDays || 1}d`;
@@ -2345,6 +2360,7 @@
     const letter = document.querySelector('input[name="pdf-paper"][value="Letter"]');
     if (letter) letter.checked = true;
     syncPdfDays();
+    syncPdfForecastSub();
     syncPdfTeamSub();
     syncPdfGlobal();
     syncPdfGlobalRange();
@@ -2354,29 +2370,51 @@
   }
   function closePdfModal() { byId('pdf-backdrop').hidden = true; }
 
-  // One project checklist that feeds every page (Forecast, Team, Global). The
-  // default check state preselects the open project when the dialog is launched
-  // from a single project; otherwise every project starts checked. Reuses the
-  // .pdf-check row chrome + the .so-dot colour swatch.
+  // One project checklist that feeds every page (Forecast, Team, Global). It spans
+  // every profile (one group per profile, then a "No profile" group), so a single
+  // PDF can mix profiles. The default check state preselects the open project when
+  // launched from a single project; otherwise it checks whatever the active
+  // profile shows, leaving other profiles' projects listed but unchecked. Reuses
+  // the .pdf-check row chrome + the .so-dot colour swatch.
   function buildPdfProjects() {
     const box = byId('pdf-projects');
     box.innerHTML = '';
-    const all = state.projects.filter(inActiveProfile);
+    const all = state.projects;
     if (!all.length) {
-      box.innerHTML = '<div class="pdf-empty">No projects in this profile.</div>';
+      box.innerHTML = '<div class="pdf-empty">No projects.</div>';
       return;
     }
     const only = (state.mode === 'project' && state.currentFile
       && all.some((p) => p.file === state.currentFile)) ? state.currentFile : null;
-    for (const p of all) {
-      const row = document.createElement('label');
-      row.className = 'pdf-check';
-      row.innerHTML = `<input type="checkbox"><span class="so-dot" style="background:${window.Palette.colorFor(p)}"></span><span class="pdf-check-label"></span>`;
-      row.querySelector('.pdf-check-label').textContent = p.title;
-      const inp = row.querySelector('input');
-      inp.dataset.file = p.file;
-      inp.checked = only ? (p.file === only) : true;
-      box.appendChild(row);
+
+    // Each project appears once, under its own profile (untagged → "No profile").
+    const byTitle = (a, b) => a.title.localeCompare(b.title);
+    const groups = [];
+    for (const name of state.profiles) {
+      const items = all.filter((p) => p.profile === name).sort(byTitle);
+      if (items.length) groups.push({ label: name, items });
+    }
+    const untagged = all.filter((p) => !p.profile).sort(byTitle);
+    if (untagged.length) groups.push({ label: 'No profile', items: untagged });
+
+    const showHeaders = groups.length > 1;
+    for (const g of groups) {
+      if (showHeaders) {
+        const hd = document.createElement('div');
+        hd.className = 'pdf-group-label';
+        hd.textContent = g.label;
+        box.appendChild(hd);
+      }
+      for (const p of g.items) {
+        const row = document.createElement('label');
+        row.className = 'pdf-check';
+        row.innerHTML = `<input type="checkbox"><span class="so-dot" style="background:${window.Palette.colorFor(p)}"></span><span class="pdf-check-label"></span>`;
+        row.querySelector('.pdf-check-label').textContent = p.title;
+        const inp = row.querySelector('input');
+        inp.dataset.file = p.file;
+        inp.checked = only ? (p.file === only) : inActiveProfile(p);
+        box.appendChild(row);
+      }
     }
   }
 
@@ -2392,6 +2430,16 @@
   function syncPdfTeamSub() {
     const on = byId('pdf-team-on').checked;
     const sub = byId('pdf-team-alltasks');
+    sub.disabled = !on;
+    const row = sub.closest('.pdf-subopt');
+    if (row) row.classList.toggle('disabled', !on);
+  }
+
+  // The "Upcoming milestones" page is a sub-option of the Forecast page, so grey
+  // it out (and ignore it on export) whenever the Forecast page itself is off.
+  function syncPdfForecastSub() {
+    const on = byId('pdf-forecast-on').checked;
+    const sub = byId('pdf-forecast-milestones');
     sub.disabled = !on;
     const row = sub.closest('.pdf-subopt');
     if (row) row.classList.toggle('disabled', !on);
@@ -2451,10 +2499,13 @@
   }
 
   async function doPdfExport() {
-    const all = state.projects.filter(inActiveProfile);
     const files = [...byId('pdf-projects').querySelectorAll('input:checked')].map((i) => i.dataset.file);
     if (!files.length) return;
-    const forecast = { on: byId('pdf-forecast-on').checked, days: clampDays(byId('pdf-forecast-days').value) };
+    const forecast = {
+      on: byId('pdf-forecast-on').checked,
+      days: clampDays(byId('pdf-forecast-days').value),
+      milestones: byId('pdf-forecast-on').checked && byId('pdf-forecast-milestones').checked,
+    };
     const teamOn = byId('pdf-team-on').checked;
     const teamDays = forecast.on ? forecast.days : clampDays(byId('pdf-team-days').value);
     const team = { on: teamOn, days: teamDays, allTasks: teamOn && byId('pdf-team-alltasks').checked };
@@ -2466,10 +2517,18 @@
     // One checklist drives every page. A single project bands the Forecast by
     // assignee (like a project view); several band it by project.
     const scopeKind = files.length === 1 ? 'project' : 'all';
-    const titleByFile = new Map(state.projects.map((p) => [p.file, p.title]));
+    // The checklist spans every profile, so name the export from the selection
+    // rather than the active profile: one shared non-empty profile names it (and
+    // enables "All <profile> projects"); a cross-profile selection has none.
+    const metaByFile = new Map(state.projects.map((p) => [p.file, p]));
+    const selProfiles = new Set(files.map((f) => (metaByFile.get(f) || {}).profile).filter(Boolean));
+    const selProfile = selProfiles.size === 1 ? [...selProfiles][0] : '';
+    const profileTotal = selProfile
+      ? state.projects.filter((p) => inProfile(p, selProfile)).length
+      : state.projects.length;
     let scopeTitle;
-    if (files.length === 1) scopeTitle = titleByFile.get(files[0]) || 'Project';
-    else if (files.length === all.length) scopeTitle = state.activeProfile ? `All ${state.activeProfile} projects` : 'All projects';
+    if (files.length === 1) scopeTitle = (metaByFile.get(files[0]) || {}).title || 'Project';
+    else if (files.length === profileTotal) scopeTitle = selProfile ? `All ${selProfile} projects` : 'All projects';
     else scopeTitle = `${files.length} projects`;
     const globalPast = { mode: byId('pdf-global-past').value, months: clampMonths(byId('pdf-global-past-n').value) };
     const globalFuture = { mode: byId('pdf-global-future').value, months: clampMonths(byId('pdf-global-future-n').value) };
@@ -2492,7 +2551,7 @@
         windowDays,
         global: { on: globalOn, projects: scopeProjects, past: globalPast, future: globalFuture },
         pageSize,
-        profileName: state.activeProfile || '',
+        profileName: selProfile,
         todayISO: P.todayISO(),
         appVersion,
       });
@@ -2511,7 +2570,7 @@
     }
   }
 
-  byId('pdf-forecast-on').addEventListener('change', () => { syncPdfDays(); syncPdfExport(); });
+  byId('pdf-forecast-on').addEventListener('change', () => { syncPdfDays(); syncPdfForecastSub(); syncPdfExport(); });
   byId('pdf-team-on').addEventListener('change', () => { syncPdfTeamSub(); syncPdfExport(); });
   byId('pdf-global-on').addEventListener('change', () => { syncPdfGlobal(); syncPdfExport(); });
   byId('pdf-projects').addEventListener('change', syncPdfExport);
