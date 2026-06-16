@@ -30,6 +30,7 @@
     activeProfile: '',  // '' = All projects
     teamEditProfile: '',// which profile's roster the Settings panel is editing
     centerGanttNext: false, // one-shot: centre today when the gantt next renders
+    showToday: false,   // "Show only today": filter Task List / Team to live + overdue
   };
 
   // ---- window controls --------------------------------------------------
@@ -45,6 +46,14 @@
   // ---- view toggle ------------------------------------------------------
   document.querySelectorAll('#view-toggle .seg-btn').forEach((btn) => {
     btn.addEventListener('click', () => setView(btn.dataset.view));
+  });
+
+  // "Show only today" filter (Task List / Team).
+  byId('today-filter').addEventListener('click', () => {
+    state.showToday = !state.showToday;
+    localStorage.setItem('showToday', state.showToday ? '1' : '0');
+    if (state.mode === 'global') renderGlobalView();
+    else renderCurrentView();
   });
 
   // Gantt zoom controls (project + global gantt share the Gantt module).
@@ -260,6 +269,7 @@
     state.currentFile = null;
     state.model = null;
     byId('view-toggle').hidden = true;
+    byId('today-filter').hidden = true;
     byId('kanban').hidden = true;
     byId('team').hidden = true;
     byId('gantt').hidden = true;
@@ -339,19 +349,58 @@
     teamShownPrev = withTasks;
   }
 
+  // Ids of tasks to keep when "Show only today" is on: those whose resolved span
+  // covers today (any status), plus overdue tasks (ended before today) that
+  // aren't Done. Uses resolveSchedule so dependency-/blank-scheduled tasks
+  // resolve too; tasks that never resolve to dates are dropped. byId optionally
+  // maps a (possibly namespaced) task id to its task object for the status check
+  // — defaults to the model's own tasks.
+  function todayTaskIds(model, byId) {
+    const DAY = 86400000;
+    const { startMs, endMs } = P.resolveSchedule(model);
+    const t0 = Date.parse(P.todayISO() + 'T00:00:00'); // local midnight today
+    const t1 = t0 + DAY;
+    const lookup = byId || new Map(model.tasks.map((t) => [t.id, t]));
+    const keep = new Set();
+    for (const t of model.tasks) {
+      const s = startMs.get(t.id);
+      const e = endMs.get(t.id);
+      if (s == null || e == null) continue;
+      const task = lookup.get(t.id) || t;
+      const intersectsToday = s < t1 && e >= t0;
+      const overdue = e < t0 && task.status !== 'done';
+      if (intersectsToday || overdue) keep.add(t.id);
+    }
+    return keep;
+  }
+
+  // The "Today" filter button only makes sense on the Task List / Team boards,
+  // so hide it on the Timeline. Reflects the on/off state via .active.
+  function updateTodayFilterBtn() {
+    const btn = byId('today-filter');
+    if (!btn) return;
+    btn.hidden = state.view === 'gantt';
+    btn.classList.toggle('active', !!state.showToday);
+  }
+
   function renderCurrentView() {
     if (state.mode === 'global') return renderGlobalView();
     if (!state.model) return;
     updateViewToggleButtons();
-    updateTeamToggle(state.model.tasks);
+    updateTeamToggle(state.model.tasks); // toggle visibility uses the full set
+    updateTodayFilterBtn();
     const kb = byId('kanban');
     const gt = byId('gantt');
     const tm = byId('team');
     const colorForTask = () => state.color; // one colour for the whole project
     kb.hidden = gt.hidden = tm.hidden = true;
+    // "Show only today" narrows the board views (never the Timeline) to tasks
+    // live today or overdue-not-done.
+    const keep = state.showToday && state.view !== 'gantt' ? todayTaskIds(state.model) : null;
+    const tasksFor = (list) => (keep ? list.filter((t) => keep.has(t.id)) : list);
     if (state.view === 'kanban') {
       kb.hidden = false;
-      window.Kanban.render(kb, state.model, {
+      window.Kanban.render(kb, keep ? { ...state.model, tasks: tasksFor(state.model.tasks) } : state.model, {
         onEditTask: openEditModal,
         onAddTask: openNewModal,
         onMoveTask: moveTask,
@@ -361,7 +410,7 @@
       // No roster passed: a single project shows only people who actually have
       // a task in it, not the whole team. (Global view below passes the full
       // roster so everyone appears.)
-      teamRender(tm, state.model.tasks, {
+      teamRender(tm, tasksFor(state.model.tasks), {
         onEditTask: openEditModal,
         onReassign: reassignTask,
         onSetStatus: moveTask,
@@ -370,7 +419,8 @@
       }, { colorForTask });
     } else {
       gt.hidden = false;
-      window.Gantt.render(byId('gantt-render'), state.model, { onEditTask: openEditModal },
+      window.Gantt.render(byId('gantt-render'), state.model,
+        { onEditTask: openEditModal, onResizeSpan: resizeSpan },
         { colorForTask, centerOnToday: state.centerGanttNext });
       state.centerGanttNext = false;
     }
@@ -422,14 +472,23 @@
   function renderGlobalView() {
     updateViewToggleButtons();
     state.built = window.GlobalView.build(state.global);
-    updateTeamToggle(state.built.kanbanModel.tasks);
+    updateTeamToggle(state.built.kanbanModel.tasks); // toggle uses the full set
+    updateTodayFilterBtn();
     const gk = byId('global-kanban');
     const gg = byId('global-gantt');
     const gtm = byId('global-team');
     gk.hidden = gg.hidden = gtm.hidden = true;
+    // "Show only today" narrows the board views (never the Timeline). The combined
+    // kanbanModel already remaps "after" refs into one namespace, so resolving it
+    // schedules dependency chains the same way the global Gantt does.
+    const km = state.built.kanbanModel;
+    const keep = state.showToday && state.view !== 'gantt'
+      ? todayTaskIds(km, new Map(km.tasks.map((t) => [t.id, t])))
+      : null;
+    const tasksFor = (list) => (keep ? list.filter((t) => keep.has(t.id)) : list);
     if (state.view === 'kanban') {
       gk.hidden = false;
-      window.Kanban.render(gk, state.built.kanbanModel, {
+      window.Kanban.render(gk, keep ? { ...km, tasks: tasksFor(km.tasks) } : km, {
         onEditTask: openGlobalKanbanTask,
         onMoveTask: globalMoveTask,
         onAddTask: () => {},
@@ -440,7 +499,7 @@
       });
     } else if (state.view === 'team') {
       gtm.hidden = false;
-      teamRender(gtm, state.built.kanbanModel.tasks, {
+      teamRender(gtm, tasksFor(state.built.kanbanModel.tasks), {
         onEditTask: openGlobalKanbanTask,
         onReassign: globalReassign,
         onSetStatus: globalMoveTask,
@@ -455,6 +514,7 @@
       gg.hidden = false;
       window.Gantt.render(byId('global-gantt-render'), state.built.ganttModel, {
         onEditTask: openGlobalGanttTask,
+        onResizeSpan: globalResizeSpan,
       }, { colorForTask: state.built.colorForGantt, centerOnToday: state.centerGanttNext });
       state.centerGanttNext = false;
     }
@@ -494,6 +554,20 @@
     renderGlobalView();
   }
 
+  // Resize a bar in the global Gantt: map the namespaced id back to its source
+  // task, apply the edge drag, write back to that project's own file, then
+  // refresh the global view (mirrors globalMoveTask).
+  async function globalResizeSpan(nsid, edge, dayDelta) {
+    const info = state.built.gInfo.get(nsid);
+    if (!info) return;
+    const proj = state.global.find((p) => p.file === info.file);
+    const t = proj && proj.model.tasks.find((x) => x.id === info.origId);
+    if (!applyResize(t, edge, dayDelta)) return;
+    const md = await window.projects.read(info.file);
+    await window.projects.write(info.file, P.writeBackToMarkdown(md, proj.model));
+    renderGlobalView();
+  }
+
   async function saveModel() {
     state.rawMd = P.writeBackToMarkdown(state.rawMd, state.model);
     await window.projects.write(state.currentFile, state.rawMd);
@@ -503,6 +577,43 @@
     const t = state.model.tasks.find((x) => x.id === id);
     if (!t || t.status === status) return;
     t.status = status;
+    await saveModel();
+    renderCurrentView();
+  }
+
+  // Apply a whole-day edge drag from the Gantt to a task in place. The right
+  // edge changes the end (duration); the left edge moves the start while keeping
+  // the end fixed (so the span lengthens/shortens from the front). Mutates the
+  // task and returns true if anything changed. dayDelta is signed (drag right is
+  // positive). The drag preview already floors the span at one day, so the
+  // Math.max guards here are just belt-and-suspenders.
+  function applyResize(t, edge, dayDelta) {
+    if (!t || t.milestone || !dayDelta) return false;
+    if (edge === 'right') {
+      if (t.duration && P.DATE_RE.test(t.duration)) {
+        t.duration = P.addDays(t.duration, dayDelta);           // explicit end date
+      } else {
+        const days = Math.max(1, Math.round(P.parseDurationDays(t.duration)) + dayDelta);
+        t.duration = days + 'd';
+      }
+      return true;
+    }
+    // Left edge: only meaningful for a fixed-date start (a relative start has no
+    // literal date to shift); the Gantt only shows the left handle in that case.
+    if (!t.start || !P.DATE_RE.test(t.start)) return false;
+    t.start = P.addDays(t.start, dayDelta);
+    // Keep the end put: an explicit end date already holds, a day-count duration
+    // must shrink/grow inversely to the start shift.
+    if (!(t.duration && P.DATE_RE.test(t.duration))) {
+      const days = Math.max(1, Math.round(P.parseDurationDays(t.duration)) - dayDelta);
+      t.duration = days + 'd';
+    }
+    return true;
+  }
+
+  async function resizeSpan(id, edge, dayDelta) {
+    const t = state.model.tasks.find((x) => x.id === id);
+    if (!applyResize(t, edge, dayDelta)) return;
     await saveModel();
     renderCurrentView();
   }
@@ -2616,6 +2727,7 @@
     // Restore the last-used view (Task List / Timeline / Team).
     const savedView = localStorage.getItem('lastView');
     if (['kanban', 'gantt', 'team'].includes(savedView)) state.view = savedView;
+    state.showToday = localStorage.getItem('showToday') === '1';
 
     // Reopen where the user left off: the global view, the same project, or —
     // failing that (e.g. everything was deleted) — straight to a blank global

@@ -241,6 +241,10 @@
       // whole task group down to sit centred. Must precede addGroupSeparators,
       // which reads the bars' positions to place the per-project rules.
       centerTaskRows(targetEl, id);
+      // Transparent grab zones on each bar's edges so a span can be dragged
+      // longer/shorter. After centerTaskRows so the handles, appended into the
+      // (now-translated) task group, inherit the same vertical centring.
+      addResizeHandles(targetEl, id);
       // Mermaid also leaves the section labels (assignee / project title) a couple
       // of px low in their bands; recentre so a single-task band reads as centred.
       // Before addGroupSeparators, which folds the (now-centred) label boxes in.
@@ -335,6 +339,108 @@
     const tag = el.tagName.toLowerCase();
     if (tag === 'rect' || tag === 'path') paint(el);
     else if (tag === 'g') el.querySelectorAll('rect, path').forEach(paint);
+  }
+
+  // ---- drag-to-resize a span -------------------------------------------
+  // Grab zone width (SVG units) at each bar edge. Sits in the same units as the
+  // bars, so it tracks zoom for free; clamped to half a narrow bar's width.
+  const RESIZE_HANDLE_W = 8;
+
+  // Append transparent ew-resize handles to each non-milestone bar so its edges
+  // can be dragged. The right handle (change duration/end) is always added; the
+  // left handle (move the start, keeping the end fixed) only when the task has a
+  // fixed YYYY-MM-DD start — a relative ("after"/blank) start has no literal date
+  // to shift. Handles live in the bar's group so they inherit centerTaskRows'
+  // transform, and report a whole-day delta to lastHandlers.onResizeSpan; the
+  // host applies it to the model and re-renders (repainting the bar for real).
+  function addResizeHandles(targetEl, renderId) {
+    if (!lastModel || !lastModel.tasks.length) return;
+    if (!lastHandlers || !lastHandlers.onResizeSpan) return;
+    const svg = targetEl.querySelector('svg');
+    if (!svg) return;
+    const toX = buildDateToX(targetEl);
+    if (!toX) return;
+    const DAY = 86400000;
+    const base = lastSpan && Number.isFinite(lastSpan.minMs) ? lastSpan.minMs : Date.now();
+    // Per-day width in SVG units, from the calibrated date->x scale's slope.
+    const pxPerDaySVG = toX(base + DAY) - toX(base);
+    if (!(pxPerDaySVG > 0) || !Number.isFinite(pxPerDaySVG)) return;
+    const prefix = renderId + '-';
+
+    for (const task of lastModel.tasks) {
+      if (task.milestone) continue;
+      const host = svg.querySelector(`[id="${CSS.escape(prefix + task.id)}"]`);
+      if (!host) continue;
+      const rect = host.tagName.toLowerCase() === 'rect'
+        ? host
+        : (host.querySelector && host.querySelector('rect'));
+      if (!rect) continue;
+      const group = rect.parentNode;
+      if (!group) continue;
+      addHandle(group, rect, task, 'right', pxPerDaySVG);
+      if (global.GanttParse.DATE_RE.test(task.start || '')) {
+        addHandle(group, rect, task, 'left', pxPerDaySVG);
+      }
+    }
+  }
+
+  function addHandle(group, rect, task, edge, pxPerDaySVG) {
+    const x = parseFloat(rect.getAttribute('x'));
+    const y = parseFloat(rect.getAttribute('y'));
+    const w = parseFloat(rect.getAttribute('width'));
+    const h = parseFloat(rect.getAttribute('height'));
+    if (![x, y, w, h].every(Number.isFinite)) return;
+    const hw = Math.min(RESIZE_HANDLE_W, Math.max(2, w / 2));
+    const handle = document.createElementNS(SVG_NS, 'rect');
+    handle.setAttribute('class', 'gantt-resize-handle');
+    handle.setAttribute('x', String(edge === 'left' ? x : x + w - hw));
+    handle.setAttribute('y', String(y));
+    handle.setAttribute('width', String(hw));
+    handle.setAttribute('height', String(h));
+    handle.addEventListener('mousedown', (e) => startResize(e, rect, task, edge, pxPerDaySVG));
+    // A bare click on the handle (no drag) must not fall through to the bar's
+    // click->edit handler.
+    handle.addEventListener('click', (e) => e.stopPropagation());
+    group.appendChild(handle);
+  }
+
+  function startResize(e, rect, task, edge, pxPerDaySVG) {
+    e.preventDefault();
+    e.stopPropagation();
+    const pxPerDayScreen = pxPerDaySVG * zoom;
+    if (!(pxPerDayScreen > 0)) return;
+    const startX = e.clientX;
+    const origX = parseFloat(rect.getAttribute('x'));
+    const origW = parseFloat(rect.getAttribute('width'));
+    if (!Number.isFinite(origX) || !Number.isFinite(origW)) return;
+
+    document.body.classList.add('gantt-resizing');
+    let dayDelta = 0;
+
+    const onMove = (ev) => {
+      dayDelta = Math.round((ev.clientX - startX) / pxPerDayScreen);
+      if (edge === 'right') {
+        let newW = origW + dayDelta * pxPerDaySVG;
+        if (newW < pxPerDaySVG) { newW = pxPerDaySVG; dayDelta = Math.round((newW - origW) / pxPerDaySVG); }
+        rect.setAttribute('width', String(newW));
+      } else {
+        // Keep the right edge (end) fixed; move the left edge (start).
+        let newW = origW - dayDelta * pxPerDaySVG;
+        if (newW < pxPerDaySVG) { newW = pxPerDaySVG; dayDelta = Math.round((origW - newW) / pxPerDaySVG); }
+        rect.setAttribute('x', String(origX + origW - newW));
+        rect.setAttribute('width', String(newW));
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('gantt-resizing');
+      if (dayDelta !== 0 && lastHandlers && lastHandlers.onResizeSpan) {
+        lastHandlers.onResizeSpan(task.id, edge, dayDelta);
+      }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   }
 
   // When a task name is wider than its bar, Mermaid draws the label OUTSIDE the

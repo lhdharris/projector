@@ -191,6 +191,33 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 #toolbar #new-task-btn:active { background: #e9f3f9; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
 #toolbar #new-task-btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
 
+/* "Show only today" filter: a flat pill beside New Task that lights up in the
+   today-line colour when active, tying it to the red marker on the timeline. */
+#toolbar #today-filter {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid #cdd6dd;
+  border-radius: 15px;
+  background: #ffffff;
+  color: #555;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+#toolbar #today-filter[hidden] { display: none; }
+body:not(.no-hover) #toolbar #today-filter:hover { background: #f3f9fc; }
+#toolbar #today-filter.active {
+  background: #fbe4dd;
+  border-color: #e8694a;
+  color: #c0492b;
+}
+
 /* ---- body layout ---- */
 #body { flex: 1 1 auto; display: flex; min-height: 0; }
 
@@ -922,6 +949,12 @@ body:not(.no-hover) #toolbar #new-task-btn:hover { background: #f3f9fc; box-shad
 /* Clickable task bars + labels */
 .gantt-clickable { cursor: pointer; }
 rect.task.gantt-clickable:hover { filter: brightness(0.94); }
+
+/* Transparent grab zones at each bar edge for drag-to-resize. */
+.gantt-resize-handle { fill: transparent; cursor: ew-resize; }
+/* Hold the resize cursor (and kill text selection) for the whole drag, wherever
+   the pointer roams. */
+body.gantt-resizing, body.gantt-resizing * { cursor: ew-resize !important; user-select: none; }
 /* Task labels sit on top of the bars; let clicks pass through to the bar so
    hovering the task name still opens the editor. */
 #gantt-render text, #global-gantt-render text { pointer-events: none; }
