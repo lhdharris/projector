@@ -73,6 +73,19 @@
     return String(a.name || '').localeCompare(String(b.name || ''));
   }
 
+  // "Louis" -> "Louis'"; "Anna" -> "Anna's" (matches the user's example).
+  function possessive(name) {
+    const n = String(name || '').trim();
+    return /s$/i.test(n) ? `${n}'` : `${n}'s`;
+  }
+  // A person's outstanding tasks as a markdown checkbox list, in display order
+  // (Done excluded). Title like "# Louis' To Do List:".
+  function toDoMarkdown(label, tasks) {
+    const open = tasks.filter((t) => t.status !== 'done');
+    const lines = open.map((t) => `- [ ] ${String(t.name || '').trim()}`);
+    return [`# ${possessive(label)} To Do List:`, '', ...lines].join('\n');
+  }
+
   // ---- small popup menu (status picker + column "⋮") -------------------
   let popupWired = false;
   function closePopup() { const m = document.getElementById('team-popup'); if (m) m.remove(); }
@@ -184,6 +197,7 @@
       e.stopPropagation();
       const items = [
         { label: 'Add task', onClick: () => handlers.onAddTaskFor && handlers.onAddTaskFor(assignee) },
+        { label: 'Copy list as tasks', onClick: () => handlers.onCopyList && handlers.onCopyList(toDoMarkdown(label, tasks)) },
       ];
       if (assignee) {
         items.push({ label: 'Delete team member', danger: true, onClick: () => handlers.onDeleteMember && handlers.onDeleteMember(assignee) });

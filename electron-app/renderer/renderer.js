@@ -416,6 +416,7 @@
         onSetStatus: moveTask,
         onAddTaskFor: (assignee) => openNewModal('todo', assignee),
         onDeleteMember: deleteMemberFromView,
+        onCopyList: copyText,
       }, { colorForTask });
     } else {
       gt.hidden = false;
@@ -505,6 +506,7 @@
         onSetStatus: globalMoveTask,
         onAddTaskFor: addTaskGlobalForAssignee,
         onDeleteMember: deleteMemberFromView,
+        onCopyList: copyText,
       }, {
         colorForTask: state.built.colorForKanban,
         projectLabel: state.built.projectLabel,
@@ -2508,13 +2510,18 @@
     const untagged = all.filter((p) => !p.profile).sort(byTitle);
     if (untagged.length) groups.push({ label: 'No profile', items: untagged });
 
+    pdfGroups = [];
     const showHeaders = groups.length > 1;
     for (const g of groups) {
+      let grp = null;
       if (showHeaders) {
-        const hd = document.createElement('div');
-        hd.className = 'pdf-group-label';
-        hd.textContent = g.label;
+        const hd = document.createElement('label');
+        hd.className = 'pdf-group';
+        hd.innerHTML = `<input type="checkbox" class="pdf-group-check"><span class="pdf-group-label"></span>`;
+        hd.querySelector('.pdf-group-label').textContent = g.label;
         box.appendChild(hd);
+        grp = { check: hd.querySelector('input'), children: [] };
+        pdfGroups.push(grp);
       }
       for (const p of g.items) {
         const row = document.createElement('label');
@@ -2524,8 +2531,21 @@
         const inp = row.querySelector('input');
         inp.dataset.file = p.file;
         inp.checked = only ? (p.file === only) : inActiveProfile(p);
+        if (grp) grp.children.push(inp);
         box.appendChild(row);
       }
+    }
+    refreshPdfGroups();
+  }
+
+  // Per-group ("workspace") checkbox state: checked when all its projects are
+  // on, indeterminate when only some are.
+  let pdfGroups = []; // [{ check: <input>, children: [<input>...] }]
+  function refreshPdfGroups() {
+    for (const g of pdfGroups) {
+      const on = g.children.filter((c) => c.checked).length;
+      g.check.checked = on === g.children.length;
+      g.check.indeterminate = on > 0 && on < g.children.length;
     }
   }
 
@@ -2533,6 +2553,7 @@
   // buttons above it.
   function setAllPdfProjects(on) {
     byId('pdf-projects').querySelectorAll('input[type="checkbox"]').forEach((i) => { i.checked = on; });
+    refreshPdfGroups();
     syncPdfExport();
   }
 
@@ -2684,7 +2705,14 @@
   byId('pdf-forecast-on').addEventListener('change', () => { syncPdfDays(); syncPdfForecastSub(); syncPdfExport(); });
   byId('pdf-team-on').addEventListener('change', () => { syncPdfTeamSub(); syncPdfExport(); });
   byId('pdf-global-on').addEventListener('change', () => { syncPdfGlobal(); syncPdfExport(); });
-  byId('pdf-projects').addEventListener('change', syncPdfExport);
+  byId('pdf-projects').addEventListener('change', (e) => {
+    if (e.target.classList.contains('pdf-group-check')) {
+      const grp = pdfGroups.find((g) => g.check === e.target);
+      if (grp) grp.children.forEach((c) => { c.checked = e.target.checked; });
+    }
+    refreshPdfGroups();
+    syncPdfExport();
+  });
   byId('pdf-projects-all').addEventListener('click', () => setAllPdfProjects(true));
   byId('pdf-projects-none').addEventListener('click', () => setAllPdfProjects(false));
   byId('pdf-global-past').addEventListener('change', syncPdfGlobalRange);
