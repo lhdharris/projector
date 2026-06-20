@@ -205,7 +205,6 @@
   // shaded by status (see Palette.shade). Omitted -> Mermaid's themed palette.
   async function render(targetEl, model, handlers, opts) {
     lastSpan = resolveSpan(model);
-    configure(lastSpan.days);
     lastTarget = targetEl;
     lastModel = model;
     lastHandlers = handlers || lastHandlers;
@@ -217,6 +216,7 @@
     setToolbarTitle(targetEl, model.title);
 
     if (!model.tasks.length) {
+      targetEl.__ganttSig = '';
       targetEl.innerHTML =
         '<div class="gantt-empty">No tasks yet. Add some in the Task List view, ' +
         'then switch back here to see the timeline.</div>';
@@ -224,6 +224,27 @@
     }
 
     const code = global.GanttParse.serializeGantt(defuseReservedNames(model));
+
+    // Re-running Mermaid is the expensive part of showing the Timeline: parse +
+    // d3 layout + DOMPurify + the reflow-heavy post-processing below all run
+    // synchronously on the main thread, enough to visibly stutter or briefly
+    // freeze on a large project. Switching away from the Timeline only *hides*
+    // its container, so the rendered SVG (with its live click/resize handlers,
+    // which read the module-level handler/zoom state we refresh above) survives.
+    // When nothing affecting the drawing has changed since we last rendered THIS
+    // view, reuse the existing SVG and skip the whole pipeline — repeat switches
+    // back to the Timeline then cost almost nothing.
+    const sig = renderSignature(code, model, lastColorForTask);
+    if (targetEl.__ganttSig === sig && targetEl.querySelector('svg')) {
+      // The project and global Timelines share these module singletons, and the
+      // other one may have rendered since, so re-read baseW/baseH off the live
+      // SVG to keep zoom and today-centring correct for this target.
+      captureBaseSize(targetEl);
+      if (opts && opts.centerOnToday) centerToday(targetEl);
+      return;
+    }
+
+    configure(lastSpan.days);
     try {
       const id = `gantt-svg-${++counter}`;
       const { svg } = await global.mermaid.render(id, code);
@@ -262,13 +283,30 @@
       // On opening the Timeline (not on in-place re-renders), scroll so today
       // sits dead-centre when the chart is wider than the view.
       if (opts && opts.centerOnToday) centerToday(targetEl);
+      // Stamp the freshly drawn SVG so a later switch back can reuse it (above).
+      targetEl.__ganttSig = sig;
     } catch (err) {
+      targetEl.__ganttSig = '';
       const msg = err && err.message ? err.message : String(err);
       targetEl.innerHTML =
         `<div class="gantt-error"><div class="gantt-error-title">Couldn’t render the timeline</div>` +
         `<pre>${escapeHtml(msg)}</pre>` +
         `<div class="gantt-error-detail">Check the Mermaid syntax in the .md file.</div></div>`;
     }
+  }
+
+  // A fingerprint of everything that changes what the chart draws: the serialized
+  // gantt source (names, dates, durations, sections, status) plus each task's
+  // resolved bar colour (applied post-render by recolour(), so not captured by
+  // the source alone). Zoom and scroll are deliberately excluded — they mutate
+  // the existing SVG in place rather than needing a re-render.
+  function renderSignature(code, model, colorForTask) {
+    if (!colorForTask) return code + '||plain';
+    let colors = '';
+    for (const t of model.tasks) {
+      colors += t.id + ':' + (colorForTask(t) || '') + ':' + (t.status || '') + ';';
+    }
+    return code + '||' + colors;
   }
 
   // The Timeline title shows in an app-styled HTML element centered over the
