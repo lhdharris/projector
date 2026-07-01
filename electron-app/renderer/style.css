@@ -218,6 +218,37 @@ body:not(.no-hover) #toolbar #today-filter:hover { background: #f3f9fc; }
   color: #c0492b;
 }
 
+/* Timeline-only team-member filter: a dropdown pill in the Today filter's slot.
+   Lights up in the app accent when a single member is selected (i.e. filtered). */
+#toolbar #member-filter {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid #cdd6dd;
+  border-radius: 15px;
+  background: #ffffff;
+  color: #555;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+#toolbar #member-filter[hidden] { display: none; }
+#toolbar #member-filter svg { flex: 0 0 auto; }
+#member-filter-label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mf-caret { flex: 0 0 auto; font-size: 10px; color: #999; }
+body:not(.no-hover) #toolbar #member-filter:hover { background: #f3f9fc; }
+#toolbar #member-filter.active {
+  background: #e3eef4;
+  border-color: #89cff0;
+  color: #1a5b7a;
+}
+#toolbar #member-filter.active .mf-caret { color: #1a5b7a; }
+
 /* ---- body layout ---- */
 #body { flex: 1 1 auto; display: flex; min-height: 0; }
 
@@ -1414,10 +1445,15 @@ label.chk input { width: auto; }
 }
 #pdf-team-days-wrap[hidden] { display: none; }
 
-/* Global-timeline month range: a "Past" and "Future" row, each a select with an
-   inline number input that only appears in the "limit" mode. */
+/* Forecast span box: the shared "next N days" line above the Timeline/Team pages. */
+.pdf-forecast-span { font-size: 12.5px; color: #555; margin: 2px 0 12px; }
+.pdf-subopt-hint { color: #aaa; }
+
+/* Global-timeline range: a "Span" select plus optional From/To date fields that
+   appear only when an explicit range is chosen. */
 .pdf-range { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 6px; }
 .pdf-range-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #777; }
+.pdf-range-row[hidden] { display: none; }
 .pdf-range-label { flex: 0 0 44px; font-weight: 600; color: #888; }
 .pdf-select {
   font: inherit; font-size: 12px; color: #333;
@@ -1425,6 +1461,12 @@ label.chk input { width: auto; }
 }
 .pdf-range-extra { display: inline-flex; align-items: center; gap: 4px; }
 .pdf-range-extra[hidden] { display: none; }
+/* The From/To date field: a text input + the shared calendar button. */
+.pdf-range-date { flex: 1 1 auto; min-width: 0; }
+.pdf-range-date input {
+  width: 100%; padding: 3px 30px 3px 6px; font: inherit; font-size: 12px;
+  border: 1px solid #d3d3d3; border-radius: 5px; background: #fff; color: #333;
+}
 .pdf-range.disabled { opacity: 0.45; pointer-events: none; }
 
 .pdf-checklist {

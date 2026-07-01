@@ -61,11 +61,24 @@
         Today
       </button>
 
+      <!-- Timeline-only: filter the chart to a single team member's tasks. Sits
+           in the same spot the Today filter holds on the board views (which is
+           hidden on the Timeline). Defaults to "All team members". -->
+      <button id="member-filter" title="Show only one team member's tasks" hidden>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+             stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="5" r="2.6"></circle>
+          <path d="M1.8 13.4c0-2.5 1.9-4 4.2-4s4.2 1.5 4.2 4"></path>
+        </svg>
+        <span id="member-filter-label">All team members</span>
+        <span class="mf-caret" aria-hidden="true">▾</span>
+      </button>
+
       <div id="drag-space"></div>
 
-      <!-- Export / share menu (box with an arrow leaving the top) — sits just
+      <!-- Export to PDF (box with an arrow leaving the top) — sits just
            left of the window controls. -->
-      <button id="export-btn" title="Share">
+      <button id="export-btn" title="Export to PDF">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
              stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M8 2.2 V 9.6"/>
@@ -306,88 +319,6 @@
     </div>
   </div>
 
-  <!-- Start meeting modal: pick what to share, then show the LAN address -->
-  <div id="share-backdrop" hidden>
-    <div id="share-modal">
-      <div id="share-modal-title">Start meeting</div>
-
-      <!-- Step 1: pick a project / workspace / all -->
-      <div id="share-picker">
-        <!-- Same-Wi-Fi requirement, naming the network when we can detect it.
-             Populated by renderer.js (setShareWifiNote). -->
-        <div id="share-wifi-note" class="share-wifi-note">
-          <svg class="share-wifi-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M2.5 8.5a15 15 0 0 1 19 0"/>
-            <path d="M5.5 12a10.5 10.5 0 0 1 13 0"/>
-            <path d="M8.5 15.5a6 6 0 0 1 7 0"/>
-            <circle cx="12" cy="19" r="0.6" fill="currentColor" stroke="none"/>
-          </svg>
-          <span class="share-wifi-text"></span>
-        </div>
-        <div class="share-hint">Pick what to share. Anyone on that Wi-Fi can open it in a browser — read-only.</div>
-        <div id="share-options"></div>
-        <div class="share-actions">
-          <span class="spacer"></span>
-          <button type="button" id="share-cancel">Cancel</button>
-          <button type="button" id="share-start" class="primary">Start sharing</button>
-        </div>
-      </div>
-
-      <!-- Step 1b: heads-up before the OS firewall prompt -->
-      <div id="share-warn" hidden>
-        <div class="share-warn-icon" aria-hidden="true">
-          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 3 4 6v5c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V6l-8-3z"/>
-            <path d="M12 8.5v4"/>
-            <circle cx="12" cy="15.5" r="0.6" fill="currentColor" stroke="none"/>
-          </svg>
-        </div>
-        <div class="share-warn-title">Your computer will ask for permission</div>
-        <div class="share-warn-body"></div>
-        <div class="share-actions">
-          <button type="button" id="share-warn-back">Back</button>
-          <span class="spacer"></span>
-          <button type="button" id="share-warn-continue" class="primary">Continue &amp; start</button>
-        </div>
-      </div>
-
-      <!-- Step 2: it's live, here's the link -->
-      <div id="share-active" hidden>
-        <div class="share-hint">Open this address in a browser on the same Wi-Fi:</div>
-        <div class="share-url-row">
-          <code id="share-url" class="share-url"></code>
-          <button type="button" id="share-copy" class="share-copy">Copy</button>
-        </div>
-        <div id="share-alt" class="share-alt"></div>
-
-        <!-- Scan-to-open QR + the PIN guests must enter. Both are filled by
-             renderer.js showActiveSharePanel (QR from the link, PIN from the
-             server). -->
-        <div class="share-join">
-          <div class="share-qr-wrap">
-            <div id="share-qr" class="share-qr" aria-label="QR code for the meeting link"></div>
-            <div class="share-qr-cap">Scan to open on a phone</div>
-          </div>
-          <div class="share-pin-block">
-            <div class="share-pin-label">Meeting PIN</div>
-            <div id="share-pin" class="share-pin"></div>
-            <div class="share-pin-hint">Guests enter this PIN to view</div>
-          </div>
-        </div>
-
-        <div id="share-scope-note" class="share-scope-note"></div>
-        <div class="share-trouble">Can’t connect? Approve the firewall prompt when sharing starts, and check that your Wi-Fi lets devices talk to each other.</div>
-        <div class="share-actions">
-          <button type="button" id="share-stop" class="danger">Stop sharing</button>
-          <span class="spacer"></span>
-          <button type="button" id="share-done" class="primary">Done</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- Export to PDF: pick scope + which pages to include, then save a PDF -->
   <div id="pdf-backdrop" hidden>
     <div id="pdf-modal">
@@ -400,62 +331,89 @@
       </div>
       <div id="pdf-projects" class="pdf-checklist"></div>
 
-      <div class="pdf-section-label">Pages</div>
+      <!-- Forecast: a shared span box drives both the Timeline and Team pages. -->
+      <div class="pdf-section-label">Forecast</div>
+      <div class="pdf-forecast-span">Forecast the next
+        <input type="number" id="pdf-forecast-days" class="pdf-days" min="1" max="120" value="7"> days.</div>
 
       <div class="pdf-opt">
-        <input type="checkbox" id="pdf-forecast-on" checked>
+        <input type="checkbox" id="pdf-forecast-timeline-on" checked>
         <div class="pdf-opt-body">
-          <label for="pdf-forecast-on" class="pdf-opt-title">Forecast page</label>
-          <div class="pdf-opt-desc">A focused timeline of just the next
-            <input type="number" id="pdf-forecast-days" class="pdf-days" min="1" max="120" value="7"> days,
-            so the meeting can be about a specific window.</div>
+          <label for="pdf-forecast-timeline-on" class="pdf-opt-title">Timeline page</label>
+          <div class="pdf-opt-desc">A focused timeline of just the forecast window above.</div>
           <label class="pdf-subopt"><input type="checkbox" id="pdf-forecast-milestones" checked>
-            Add an “Upcoming milestones” page — all forthcoming milestones in the included projects.</label>
+            <span>Include upcoming milestones from the next
+              <input type="number" id="pdf-forecast-milestone-weeks" class="pdf-days" min="1" max="520">
+              weeks <span class="pdf-subopt-hint">(blank = all upcoming)</span></span></label>
         </div>
       </div>
 
       <div class="pdf-opt">
-        <input type="checkbox" id="pdf-team-on" checked>
+        <input type="checkbox" id="pdf-forecast-team-on" checked>
         <div class="pdf-opt-body">
-          <label for="pdf-team-on" class="pdf-opt-title">Team page</label>
-          <div class="pdf-opt-desc">Each team member's tasks for the window, as a dated checklist.
-            Overdue tasks carried over from earlier are kept and flagged.
-            <span id="pdf-team-days-wrap">Next
-              <input type="number" id="pdf-team-days" class="pdf-days" min="1" max="120" value="7"> days.</span>
-            <span id="pdf-team-shared" hidden>Uses the same window as the forecast above.</span></div>
-          <label class="pdf-subopt"><input type="checkbox" id="pdf-team-alltasks">
-            Add an “All tasks” page — every task with its assignee, in one long list.</label>
+          <label for="pdf-forecast-team-on" class="pdf-opt-title">Team page</label>
+          <div class="pdf-opt-desc">Each team member's tasks for the forecast window, as a dated
+            checklist. Overdue tasks carried over from earlier are kept and flagged.</div>
+        </div>
+      </div>
+
+      <!-- Global: two independent pages spanning every selected project. -->
+      <div class="pdf-section-label">Global</div>
+
+      <div class="pdf-opt">
+        <input type="checkbox" id="pdf-global-alltasks-on">
+        <div class="pdf-opt-body">
+          <label for="pdf-global-alltasks-on" class="pdf-opt-title">All tasks</label>
+          <div class="pdf-opt-desc">Every task across the selected projects, with its assignee,
+            in one long list.</div>
+          <label class="pdf-subopt"><input type="checkbox" id="pdf-global-completed">
+            Include completed tasks</label>
         </div>
       </div>
 
       <div class="pdf-opt">
-        <input type="checkbox" id="pdf-global-on" checked>
+        <input type="checkbox" id="pdf-global-timeline-on" checked>
         <div class="pdf-opt-body">
-          <label for="pdf-global-on" class="pdf-opt-title">Global timeline</label>
+          <label for="pdf-global-timeline-on" class="pdf-opt-title">Timeline</label>
           <div class="pdf-opt-desc">A landscape, full-length timeline split into one-month pages,
-            with the chosen window highlighted.</div>
-          <!-- How far back / forward the month pages reach. Default: drop past
-               months, keep the current month onward through the last task. -->
+            with the forecast window highlighted where it falls.</div>
+          <!-- Which slice of the full timeline to render: everything, an explicit
+               start→end range, or start→last-task. -->
           <div id="pdf-global-range" class="pdf-range">
             <div class="pdf-range-row">
-              <span class="pdf-range-label">Past</span>
-              <select id="pdf-global-past" class="pdf-select">
-                <option value="none" selected>Current month onward</option>
-                <option value="limit">Go back…</option>
-                <option value="all">Include all past</option>
+              <span class="pdf-range-label">Span</span>
+              <select id="pdf-global-range-mode" class="pdf-select">
+                <option value="all" selected>Whole timeline (every task)</option>
+                <option value="range">From a start date to an end date</option>
+                <option value="toEnd">From a start date through the last task</option>
               </select>
-              <span id="pdf-global-past-extra" class="pdf-range-extra" hidden>
-                <input type="number" id="pdf-global-past-n" class="pdf-days" min="1" max="120" value="3"> months
+            </div>
+            <div id="pdf-global-start-row" class="pdf-range-row" hidden>
+              <span class="pdf-range-label">From</span>
+              <span class="date-field pdf-range-date">
+                <input type="text" id="pdf-global-start" autocomplete="off" inputmode="numeric" placeholder="YYYY-MM-DD">
+                <button type="button" class="date-cal-btn" tabindex="-1" aria-label="Open calendar">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                    <rect x="2" y="3" width="12" height="11" rx="2"></rect>
+                    <line x1="2" y1="6.5" x2="14" y2="6.5"></line>
+                    <line x1="5.5" y1="1.6" x2="5.5" y2="4"></line>
+                    <line x1="10.5" y1="1.6" x2="10.5" y2="4"></line>
+                  </svg>
+                </button>
               </span>
             </div>
-            <div class="pdf-range-row">
-              <span class="pdf-range-label">Future</span>
-              <select id="pdf-global-future" class="pdf-select">
-                <option value="all" selected>Through the last task</option>
-                <option value="limit">Next…</option>
-              </select>
-              <span id="pdf-global-future-extra" class="pdf-range-extra" hidden>
-                <input type="number" id="pdf-global-future-n" class="pdf-days" min="1" max="120" value="3"> months
+            <div id="pdf-global-end-row" class="pdf-range-row" hidden>
+              <span class="pdf-range-label">To</span>
+              <span class="date-field pdf-range-date">
+                <input type="text" id="pdf-global-end" autocomplete="off" inputmode="numeric" placeholder="YYYY-MM-DD">
+                <button type="button" class="date-cal-btn" tabindex="-1" aria-label="Open calendar">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                    <rect x="2" y="3" width="12" height="11" rx="2"></rect>
+                    <line x1="2" y1="6.5" x2="14" y2="6.5"></line>
+                    <line x1="5.5" y1="1.6" x2="5.5" y2="4"></line>
+                    <line x1="10.5" y1="1.6" x2="10.5" y2="4"></line>
+                  </svg>
+                </button>
               </span>
             </div>
           </div>
@@ -561,7 +519,6 @@
   </div>
 
   <script src="vendor/mermaid.min.js"></script>
-  <script src="vendor/qrcode.js"></script>
   <script src="palette.js"></script>
   <script src="gantt-parse.js"></script>
   <script src="pdf-export.js"></script>

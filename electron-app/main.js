@@ -321,6 +321,9 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   installContextMenu(win);
+  // Drop the reused PDF render window with the main window, so a hidden export
+  // window can't keep window-all-closed from firing (which would block quit).
+  win.on('closed', closePdfWindow);
 }
 
 // A right-click clipboard menu. Electron ships no default context menu, and the
@@ -537,23 +540,43 @@ ipcMain.handle('pdf:chooseFolder', async (e, payload) => {
   return { dir: res.filePaths[0] };
 });
 
+// One hidden, script-disabled window renders every PDF, and we REUSE it across
+// exports instead of creating a fresh one each time. Creating a second
+// BrowserWindow this way fails to load on some GPU setups (the navigation errors
+// with ERR_FAILED and the export then hangs), so "Export to PDF" worked exactly
+// once per session and then appeared broken; a warm, reused window also makes
+// repeat exports far faster. The window is torn down after a quiet spell and when
+// the main window closes (see createWindow / before-quit) so it never lingers as
+// a hidden renderer or holds window-all-closed open and blocks quit.
+let pdfWin = null;
+let pdfIdleTimer = null;
+function getPdfWindow() {
+  if (pdfIdleTimer) { clearTimeout(pdfIdleTimer); pdfIdleTimer = null; }
+  if (pdfWin && !pdfWin.isDestroyed()) return pdfWin;
+  pdfWin = new BrowserWindow({
+    show: false,
+    webPreferences: { javascript: false, contextIsolation: true, nodeIntegration: false },
+  });
+  pdfWin.on('closed', () => { pdfWin = null; });
+  return pdfWin;
+}
+function closePdfWindow() {
+  if (pdfIdleTimer) { clearTimeout(pdfIdleTimer); pdfIdleTimer = null; }
+  if (pdfWin && !pdfWin.isDestroyed()) pdfWin.destroy();
+  pdfWin = null;
+}
+
 // Render a complete, self-contained HTML document (inline CSS + inline SVG, no
-// scripts, no external assets) to a PDF Buffer in a hidden, script-disabled
-// window loaded from a temp file (more robust than a huge data: URL for SVG-heavy
-// documents). preferCSSPageSize lets the document's named @page rules drive paper
-// size + per-page orientation, so a single PDF mixes portrait (forecast/team) and
-// landscape (global) pages. Shared by "Export to PDF" and the viewer's "Download
-// PDF"; the temp name is uniquified so concurrent renders never collide.
-async function htmlToPdfBuffer(html) {
+// scripts, no external assets) to a PDF Buffer, loading it from a temp file (more
+// robust than a huge data: URL for SVG-heavy documents). preferCSSPageSize lets
+// the document's named @page rules drive paper size + per-page orientation, so a
+// single PDF mixes portrait (forecast/team) and landscape (global) pages.
+async function renderPdfOnce(html) {
   const tmp = path.join(app.getPath('temp'),
     `projector-export-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
-  let win = null;
   try {
     fs.writeFileSync(tmp, html, 'utf8');
-    win = new BrowserWindow({
-      show: false,
-      webPreferences: { javascript: false, contextIsolation: true, nodeIntegration: false },
-    });
+    const win = getPdfWindow();
     await win.loadFile(tmp);
     // displayHeaderFooter + a footer template stamps "Page X of Y" in the bottom
     // @page margin of every physical page. This is the only reliable way to number
@@ -572,9 +595,23 @@ async function htmlToPdfBuffer(html) {
         + 'Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
     });
   } finally {
-    if (win && !win.isDestroyed()) win.destroy();
     fs.rm(tmp, { force: true }, () => {});
+    // Release the warm window after a quiet spell so an idle app isn't holding a
+    // hidden renderer (and window-all-closed fires normally once exports stop).
+    if (pdfIdleTimer) clearTimeout(pdfIdleTimer);
+    pdfIdleTimer = setTimeout(closePdfWindow, 30000);
   }
+}
+
+// Public entry point, shared by "Export to PDF" and the viewer's "Download PDF".
+// Renders are serialized onto the single shared window so two concurrent callers
+// (a user export racing a viewer download) take turns instead of clobbering each
+// other's navigation.
+let pdfQueue = Promise.resolve();
+function htmlToPdfBuffer(html) {
+  const run = pdfQueue.then(() => renderPdfOnce(html));
+  pdfQueue = run.catch(() => {}); // keep the chain alive even if a render fails
+  return run;
 }
 
 // The renderer hands us a complete, self-contained HTML document. We render it to
@@ -633,8 +670,10 @@ function exportSandbox() {
   return pdfSandbox;
 }
 
-// Build the export HTML for a meeting-share /data payload: every page (Forecast,
-// Team, Global) for exactly the shared projects, with sensible default windows.
+// Build the export HTML for a meeting-share /data payload: every page (Forecast
+// Timeline + Team, Global timeline) for exactly the shared projects, with sensible
+// defaults. Dormant while the share UI is unwired, but kept in sync with the
+// renderer's buildDocument opts shape so it still works if sharing is restored.
 function renderShareHtml(data) {
   const { Palette, GanttParse, PdfExport } = exportSandbox();
   const projects = (data.projects || []).map((p) => ({
@@ -648,10 +687,17 @@ function renderShareHtml(data) {
     scopeKind,
     scopeTitle: data.title || (scopeKind === 'all' ? 'All projects' : (projects[0] && projects[0].title) || 'Project'),
     scopeProjects: projects,
-    forecast: { on: true, days: 7 },
-    team: { on: true, days: 7 },
     windowDays: 7,
-    global: { on: true, projects, past: { mode: 'none', months: 3 }, future: { mode: 'all', months: 3 } },
+    forecast: {
+      days: 7,
+      timeline: { on: true, milestones: true, milestoneWeeks: null },
+      team: { on: true },
+    },
+    global: {
+      projects,
+      allTasks: { on: false, includeCompleted: false },
+      timeline: { on: true, range: { mode: 'all' } },
+    },
     pageSize: 'Letter',
     profileName: '',
     todayISO: GanttParse.todayISO(),
@@ -703,8 +749,8 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   // A share must never outlive the app: drop the server when the app is
-  // quitting or all its windows are gone.
-  app.on('before-quit', () => shareServer.stop());
+  // quitting or all its windows are gone. Tear down the reused PDF window too.
+  app.on('before-quit', () => { shareServer.stop(); closePdfWindow(); });
 
   app.on('window-all-closed', () => {
     shareServer.stop();

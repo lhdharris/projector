@@ -24,7 +24,7 @@
     const kTasks = [];
     const gTasks = [];
     const kInfo = new Map(); // gid  -> { file, origId, color, title }
-    const gInfo = new Map(); // nsid -> { file, origId, color, title }
+    const gInfo = new Map(); // nsid -> { file, origId, color, title, assignee }
 
     projects.forEach((proj, idx) => {
       const color = global.Palette.colorFor(proj);
@@ -45,14 +45,16 @@
         kInfo.set(gid, { file: proj.file, origId: t.id, color, title: proj.title });
 
         // The global Gantt bands by project, so override the per-bar grouping
-        // (the serializer groups by `assignee`) with the project title.
+        // (the serializer groups by `assignee`) with the project title. The
+        // original assignee is stashed in gInfo so the timeline's team-member
+        // filter can still narrow to one person across all projects.
         const nsid = remap.get(t.id);
         gTasks.push(Object.assign({}, t, {
           id: nsid,
           assignee: proj.title || 'Project',
           start: remapStart(t.start, remap),
         }));
-        gInfo.set(nsid, { file: proj.file, origId: t.id, color, title: proj.title });
+        gInfo.set(nsid, { file: proj.file, origId: t.id, color, title: proj.title, assignee: t.assignee || '' });
       });
     });
 

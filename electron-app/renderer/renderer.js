@@ -31,6 +31,7 @@
     teamEditProfile: '',// which profile's roster the Settings panel is editing
     centerGanttNext: false, // one-shot: centre today when the gantt next renders
     showToday: false,   // "Show only today": filter Task List / Team to live + overdue
+    memberFilter: '',   // Timeline only: '' = all, else show one assignee's tasks
   };
 
   // ---- window controls --------------------------------------------------
@@ -55,6 +56,9 @@
     if (state.mode === 'global') renderGlobalView();
     else renderCurrentView();
   });
+
+  // Timeline team-member filter (occupies the Today filter's slot on the Timeline).
+  byId('member-filter').addEventListener('click', openMemberFilterMenu);
 
   // Gantt zoom controls (project + global gantt share the Gantt module).
   byId('gantt-zoom-in').addEventListener('click', () => window.Gantt.zoomIn());
@@ -243,6 +247,7 @@
 
   async function selectProject(file) {
     state.mode = 'project';
+    state.memberFilter = ''; // a per-person timeline focus doesn't carry across projects
     state.currentFile = file;
     state.rawMd = await window.projects.read(file);
     const block = P.extractMermaidBlock(state.rawMd);
@@ -383,12 +388,81 @@
     btn.classList.toggle('active', !!state.showToday);
   }
 
+  // Distinct assignees with at least one task in the current scope (the open
+  // project, or every project in Global), sorted for the filter dropdown. Only
+  // people who actually have tasks are offered, since filtering to anyone else
+  // would show an empty timeline.
+  function timelineMembers() {
+    const set = new Set();
+    const models = state.mode === 'global'
+      ? state.global.map((p) => p.model)
+      : (state.model ? [state.model] : []);
+    for (const m of models) for (const t of m.tasks) {
+      if (t.assignee && t.assignee.trim()) set.add(t.assignee.trim());
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }
+
+  // The team-member filter takes the Today filter's slot, but only on the
+  // Timeline and only when there's someone to filter by. The label echoes the
+  // current selection; a real selection lights the pill (and drops if the chosen
+  // member no longer has any task in scope).
+  function updateMemberFilterBtn() {
+    const btn = byId('member-filter');
+    if (!btn) return;
+    const members = timelineMembers();
+    if (state.memberFilter && !members.includes(state.memberFilter)) state.memberFilter = '';
+    btn.hidden = !(state.view === 'gantt' && members.length);
+    byId('member-filter-label').textContent = state.memberFilter || 'All team members';
+    btn.classList.toggle('active', !!state.memberFilter);
+  }
+
+  function openMemberFilterMenu(e) {
+    if (e) e.stopPropagation(); // don't let this click reach the doc-level menu closer
+    const r = byId('member-filter').getBoundingClientRect();
+    const items = [{
+      label: 'All team members' + (!state.memberFilter ? '  ✓' : ''),
+      onClick: () => setMemberFilter(''),
+    }];
+    for (const name of timelineMembers()) {
+      items.push({ label: name + (state.memberFilter === name ? '  ✓' : ''), onClick: () => setMemberFilter(name) });
+    }
+    // Anchor under the button's left edge; let the menu size to its content
+    // (it carries a sensible min-width) so the label never wraps.
+    showContextMenu(r.left, r.bottom, items);
+  }
+
+  function setMemberFilter(name) {
+    state.memberFilter = name;
+    if (state.mode === 'global') renderGlobalView();
+    else renderCurrentView();
+  }
+
+  // Narrow a Gantt model to one assignee for the member filter. The global model
+  // overrides each task's assignee with its project title (for banding), so the
+  // real assignee comes from `assigneeOf`. Relative ("after"/blank) starts are
+  // pinned to their resolved absolute date: the tasks they chained off may be
+  // filtered out, so without pinning their bars would drift. Absolute-date tasks
+  // are left untouched (keeping their working left-edge resize handle).
+  function memberFilterModel(model, member, assigneeOf) {
+    const { startMs } = P.resolveSchedule(model);
+    const tasks = [];
+    for (const t of model.tasks) {
+      if ((assigneeOf(t) || '') !== member) continue;
+      if (t.start && P.DATE_RE.test(t.start)) { tasks.push(t); continue; }
+      const s = startMs.get(t.id);
+      tasks.push(s == null ? t : Object.assign({}, t, { start: P.toISO(new Date(s)) }));
+    }
+    return Object.assign({}, model, { tasks });
+  }
+
   function renderCurrentView() {
     if (state.mode === 'global') return renderGlobalView();
     if (!state.model) return;
     updateViewToggleButtons();
     updateTeamToggle(state.model.tasks); // toggle visibility uses the full set
     updateTodayFilterBtn();
+    updateMemberFilterBtn();
     const kb = byId('kanban');
     const gt = byId('gantt');
     const tm = byId('team');
@@ -420,7 +494,10 @@
       }, { colorForTask });
     } else {
       gt.hidden = false;
-      window.Gantt.render(byId('gantt-render'), state.model,
+      const gm = state.memberFilter
+        ? memberFilterModel(state.model, state.memberFilter, (t) => t.assignee)
+        : state.model;
+      window.Gantt.render(byId('gantt-render'), gm,
         { onEditTask: openEditModal, onResizeSpan: resizeSpan },
         { colorForTask, centerOnToday: state.centerGanttNext });
       state.centerGanttNext = false;
@@ -430,6 +507,7 @@
   // ---- global view ------------------------------------------------------
   async function enterGlobal() {
     state.mode = 'global';
+    state.memberFilter = ''; // start the global timeline showing everyone
     // Load + parse the projects in the active profile fresh ("All projects"
     // keeps everything, since inActiveProfile is then true for all). Folders are
     // refreshed too so closing a workspace from global view drops it from the
@@ -475,6 +553,7 @@
     state.built = window.GlobalView.build(state.global);
     updateTeamToggle(state.built.kanbanModel.tasks); // toggle uses the full set
     updateTodayFilterBtn();
+    updateMemberFilterBtn();
     const gk = byId('global-kanban');
     const gg = byId('global-gantt');
     const gtm = byId('global-team');
@@ -514,7 +593,11 @@
       });
     } else {
       gg.hidden = false;
-      window.Gantt.render(byId('global-gantt-render'), state.built.ganttModel, {
+      const gm = state.memberFilter
+        ? memberFilterModel(state.built.ganttModel, state.memberFilter,
+            (t) => (state.built.gInfo.get(t.id) || {}).assignee)
+        : state.built.ganttModel;
+      window.Gantt.render(byId('global-gantt-render'), gm, {
         onEditTask: openGlobalGanttTask,
         onResizeSpan: globalResizeSpan,
       }, { colorForTask: state.built.colorForGantt, centerOnToday: state.centerGanttNext });
@@ -2126,321 +2209,14 @@
     rerender();
   }
 
-  // ---- share meeting ----------------------------------------------------
-  // The export button opens a dropdown (room for more items later); "Share
-  // meeting" lets you pick a project / workspace / all, then spins up the
-  // read-only LAN viewer (main process) and shows its address.
-  let shareInfo = null;       // { active, primaryUrl, urls, port, title } while live
-  let shareSelection = null;  // the picker row currently chosen
-  let shareWifi = null;       // detected Wi-Fi SSID (or null) for the share copy
-
+  // ---- export button ----------------------------------------------------
+  // Opens the "Export to PDF" dialog directly. The old share-meeting dropdown
+  // has been retired; the LAN viewer server (main process + share-server.js)
+  // remains in the codebase but is dormant — nothing starts it.
   byId('export-btn').addEventListener('click', (e) => {
     e.stopPropagation();
-    const r = byId('export-btn').getBoundingClientRect();
-    const items = shareInfo
-      ? [
-          { label: 'Sharing — show link', onClick: openShareModal },
-          { label: 'Copy share link', onClick: () => copyText(shareInfo.primaryUrl) },
-          { separator: true },
-          { label: 'Export to PDF…', onClick: openPdfModal },
-          { separator: true },
-          { label: 'Stop sharing', danger: true, onClick: stopShare },
-        ]
-      : [
-          { label: 'Start meeting', onClick: openShareModal },
-          { separator: true },
-          { label: 'Export to PDF…', onClick: openPdfModal },
-        ];
-    // Drop the menu straight down from the button's top-left corner (same
-    // top-left anchoring the new-project workspace picker uses).
-    showContextMenu(r.left, r.bottom + 4, items);
+    openPdfModal();
   });
-
-  function setExportSharing(on) { byId('export-btn').classList.toggle('sharing', !!on); }
-
-  function openShareModal() {
-    if (shareInfo) showActiveSharePanel();
-    else {
-      byId('share-active').hidden = true;
-      byId('share-warn').hidden = true;
-      byId('share-picker').hidden = false;
-      buildShareOptions();
-      refreshShareWifi();
-    }
-    byId('share-backdrop').hidden = false;
-  }
-  function closeShareModal() { byId('share-backdrop').hidden = true; }
-
-  // Detect the current Wi-Fi network so the picker can name it and the warning /
-  // active panels can be specific about which network guests must join. Shows the
-  // last-known value immediately, then refreshes once the lookup returns.
-  function refreshShareWifi() {
-    setShareWifiNote(shareWifi);
-    window.share?.wifi().then((ssid) => {
-      shareWifi = ssid || null;
-      setShareWifiNote(shareWifi);
-    }).catch(() => {});
-  }
-
-  // SSID quoted for plain-text copy, or a generic phrase when unknown.
-  function wifiPhrase() { return shareWifi ? `the “${shareWifi}” Wi-Fi` : 'your Wi-Fi'; }
-
-  function setShareWifiNote(ssid) {
-    const t = byId('share-wifi-note').querySelector('.share-wifi-text');
-    t.textContent = '';
-    if (ssid) {
-      t.append('Everyone must be on the same Wi-Fi as this computer: ');
-      const strong = document.createElement('strong');
-      strong.textContent = ssid;
-      t.append(strong);
-    } else {
-      t.append('Everyone must be on the same Wi-Fi network as this computer.');
-    }
-  }
-
-  // Step 1b: warn that an OS firewall prompt is coming BEFORE it appears, so the
-  // password/approval dialog is never a surprise. Continue actually starts.
-  function showShareWarn() {
-    if (!shareSelection) return;
-    byId('share-warn').querySelector('.share-warn-body').textContent =
-      `To let other devices on ${wifiPhrase()} reach this shared view, your computer ` +
-      `will ask for permission — a password or a security approval — to allow it through ` +
-      `the firewall. This only opens access to this shared content, nothing else.`;
-    byId('share-picker').hidden = true;
-    byId('share-warn').hidden = false;
-  }
-
-  // Build the radio list: "All projects", then each workspace (share the whole
-  // folder + each of its projects), filtered by the active profile.
-  function buildShareOptions() {
-    const container = byId('share-options');
-    container.innerHTML = '';
-    shareSelection = null;
-
-    const all = state.projects.filter(inActiveProfile);
-    const startBtn = byId('share-start');
-    if (!all.length) {
-      container.innerHTML = '<div class="share-empty">No projects to share yet.</div>';
-      startBtn.disabled = true;
-      return;
-    }
-    startBtn.disabled = false;
-
-    const opts = [];
-    opts.push({
-      kind: 'all',
-      label: state.activeProfile ? `All ${state.activeProfile} projects` : 'All projects',
-      title: state.activeProfile ? `${state.activeProfile} — all projects` : 'All projects',
-      files: all.map((p) => p.file),
-      count: all.length,
-    });
-    for (const folder of state.folders) {
-      const inFolder = all.filter((p) => p.folderPath === folder.path);
-      if (!inFolder.length) continue;
-      opts.push({ kind: 'head', label: folder.name });
-      if (inFolder.length > 1) {
-        opts.push({
-          kind: 'workspace', sub: true,
-          label: `Everything in ${folder.name}`, title: folder.name,
-          files: inFolder.map((p) => p.file), count: inFolder.length,
-        });
-      }
-      for (const p of inFolder) {
-        opts.push({ kind: 'project', sub: true, label: p.title, title: p.title, files: [p.file], color: window.Palette.colorFor(p) });
-      }
-    }
-
-    // Preselect whatever's on screen: the open project, else "All projects".
-    let preselect = opts[0];
-    if (state.mode === 'project' && state.currentFile) {
-      const found = opts.find((o) => o.kind === 'project' && o.files[0] === state.currentFile);
-      if (found) preselect = found;
-    }
-
-    for (const o of opts) {
-      if (o.kind === 'head') {
-        const h = document.createElement('div');
-        h.className = 'share-opt-head';
-        h.textContent = o.label;
-        container.appendChild(h);
-        continue;
-      }
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'share-opt' + (o.sub ? ' sub' : '');
-      const dot = o.color ? `<span class="so-dot" style="background:${o.color}"></span>` : '';
-      const count = o.count ? `<span class="so-count">${o.count}</span>` : '';
-      b.innerHTML = `<span class="so-radio"></span>${dot}<span class="so-label"></span>${count}`;
-      b.querySelector('.so-label').textContent = o.label;
-      b.addEventListener('click', () => {
-        shareSelection = o;
-        container.querySelectorAll('.share-opt').forEach((el) => el.classList.remove('selected'));
-        b.classList.add('selected');
-      });
-      o._el = b;
-      container.appendChild(b);
-    }
-    if (preselect && preselect._el) { shareSelection = preselect; preselect._el.classList.add('selected'); }
-  }
-
-  // Triggered from the warning step's "Continue & start": this is the call that
-  // spins up the server and (in the main process) raises the firewall prompt.
-  async function startShare() {
-    if (!shareSelection) return;
-    const { files, title } = shareSelection;
-    const btn = byId('share-warn-continue');
-    btn.disabled = true;
-    btn.textContent = 'Starting…';
-    try {
-      const res = await window.share.start({ files, title, view: state.view });
-      shareInfo = Object.assign({}, res, { title });
-      setExportSharing(true);
-      showActiveSharePanel();
-    } catch (err) {
-      window.alert('Could not start sharing: ' + ((err && err.message) || err));
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Continue & start';
-    }
-  }
-
-  function showActiveSharePanel() {
-    byId('share-picker').hidden = true;
-    byId('share-warn').hidden = true;
-    byId('share-active').hidden = false;
-    byId('share-url').textContent = shareInfo.primaryUrl;
-
-    const alt = byId('share-alt');
-    alt.innerHTML = '';
-    const extras = (shareInfo.urls || []).filter((u) => u !== shareInfo.primaryUrl);
-    if (extras.length) {
-      const lead = document.createElement('div');
-      lead.className = 'share-alt-item';
-      lead.textContent = 'Other addresses to try:';
-      alt.appendChild(lead);
-      for (const u of extras) {
-        const d = document.createElement('div');
-        d.className = 'share-alt-item';
-        d.textContent = u;
-        alt.appendChild(d);
-      }
-    }
-
-    // QR of the link (scan to open) + the PIN guests must type to get in.
-    renderShareQr(shareInfo.primaryUrl);
-    byId('share-pin').textContent = shareInfo.pin ? formatPin(shareInfo.pin) : '';
-    byId('share-pin').closest('.share-join').hidden = !shareInfo.pin;
-
-    byId('share-scope-note').textContent =
-      `Sharing “${shareInfo.title}”. It updates live as you work — anyone on ${wifiPhrase()} ` +
-      `with this link and the PIN can view it (read-only) until you stop.`;
-  }
-
-  // Spaced for readability on screen (e.g. "12 34"); the value typed is "1234".
-  function formatPin(pin) {
-    const s = String(pin);
-    return s.length === 4 ? `${s.slice(0, 2)} ${s.slice(2)}` : s;
-  }
-
-  // Draw the meeting link as a QR into #share-qr — an inline SVG (one <path> for
-  // all dark modules) so it stays crisp at any size and needs no <img>/data: URL.
-  // window.QRCode (vendored node-qrcode core) builds the module matrix; we paint.
-  function renderShareQr(url) {
-    const box = byId('share-qr');
-    const wrap = box.closest('.share-qr-wrap');
-    box.innerHTML = '';
-    if (!url || !window.QRCode) { wrap.hidden = true; return; }
-    let qr;
-    try { qr = window.QRCode.create(url, { errorCorrectionLevel: 'M' }); }
-    catch { wrap.hidden = true; return; }
-    wrap.hidden = false;
-
-    const n = qr.modules.size;
-    const quiet = 4;                 // standard QR quiet zone (modules)
-    const dim = n + quiet * 2;
-    const NS = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(NS, 'svg');
-    svg.setAttribute('viewBox', `0 0 ${dim} ${dim}`);
-    svg.setAttribute('width', '168');
-    svg.setAttribute('height', '168');
-    svg.setAttribute('shape-rendering', 'crispEdges');
-    svg.setAttribute('role', 'img');
-
-    const bg = document.createElementNS(NS, 'rect');
-    bg.setAttribute('width', String(dim));
-    bg.setAttribute('height', String(dim));
-    bg.setAttribute('fill', '#ffffff');
-    svg.appendChild(bg);
-
-    let d = '';
-    for (let r = 0; r < n; r++) {
-      for (let c = 0; c < n; c++) {
-        if (qr.modules.get(r, c)) d += `M${c + quiet} ${r + quiet}h1v1h-1z`;
-      }
-    }
-    const path = document.createElementNS(NS, 'path');
-    path.setAttribute('d', d);
-    path.setAttribute('fill', '#16181d');
-    svg.appendChild(path);
-    box.appendChild(svg);
-  }
-
-  async function stopShare() {
-    try { await window.share.stop(); } catch { /* already gone */ }
-    shareInfo = null;
-    setExportSharing(false);
-    closeShareModal();
-  }
-
-  // Clipboard with a file:// fallback (the async Clipboard API can be blocked).
-  function copyText(text) {
-    const fallback = () => {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      } catch { /* nothing more we can do */ }
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).catch(fallback);
-    }
-    fallback();
-    return Promise.resolve();
-  }
-
-  byId('share-start').addEventListener('click', showShareWarn);
-  byId('share-warn-continue').addEventListener('click', startShare);
-  byId('share-warn-back').addEventListener('click', () => {
-    byId('share-warn').hidden = true;
-    byId('share-picker').hidden = false;
-  });
-  byId('share-cancel').addEventListener('click', closeShareModal);
-  byId('share-done').addEventListener('click', closeShareModal);
-  byId('share-stop').addEventListener('click', stopShare);
-  byId('share-copy').addEventListener('click', () => {
-    copyText(shareInfo ? shareInfo.primaryUrl : byId('share-url').textContent);
-    const btn = byId('share-copy');
-    btn.classList.add('copied');
-    btn.textContent = 'Copied';
-    setTimeout(() => { btn.classList.remove('copied'); btn.textContent = 'Copy'; }, 1400);
-  });
-  byId('share-backdrop').addEventListener('mousedown', (e) => {
-    if (e.target === byId('share-backdrop')) closeShareModal();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !byId('share-backdrop').hidden) closeShareModal();
-  });
-
-  // A window reload re-runs the renderer while the main-process server keeps
-  // running; restore the active-share state so the button stays lit.
-  window.share?.status().then((s) => {
-    if (s && s.active) { shareInfo = Object.assign({}, s); setExportSharing(true); }
-  }).catch(() => {});
 
   // ---- export to PDF ----------------------------------------------------
   // Builds a print-ready HTML document (window.PdfExport) and hands it to the
@@ -2460,23 +2236,24 @@
 
   function openPdfModal() {
     buildPdfProjects();
-    byId('pdf-forecast-on').checked = true;
-    byId('pdf-team-on').checked = true;
-    byId('pdf-global-on').checked = true;
-    byId('pdf-team-alltasks').checked = false;
+    // Forecast section: shared span drives both pages.
     byId('pdf-forecast-days').value = '7';
-    byId('pdf-team-days').value = '7';
-    byId('pdf-global-past').value = 'none';
-    byId('pdf-global-future').value = 'all';
-    byId('pdf-global-past-n').value = '3';
-    byId('pdf-global-future-n').value = '3';
+    byId('pdf-forecast-timeline-on').checked = true;
+    byId('pdf-forecast-milestones').checked = true;
+    byId('pdf-forecast-milestone-weeks').value = ''; // blank = all upcoming
+    byId('pdf-forecast-team-on').checked = true;
+    // Global section: All tasks off by default; Timeline on, whole span.
+    byId('pdf-global-alltasks-on').checked = false;
+    byId('pdf-global-completed').checked = false;
+    byId('pdf-global-timeline-on').checked = true;
+    byId('pdf-global-range-mode').value = 'all';
+    byId('pdf-global-start').value = P.todayISO();
+    byId('pdf-global-end').value = '';
     const letter = document.querySelector('input[name="pdf-paper"][value="Letter"]');
     if (letter) letter.checked = true;
-    syncPdfDays();
-    syncPdfForecastSub();
-    syncPdfTeamSub();
-    syncPdfGlobal();
-    syncPdfGlobalRange();
+    syncForecast();
+    syncGlobalAllTasks();
+    syncGlobalTimeline();
     renderPdfFolder();
     syncPdfExport();
     byId('pdf-backdrop').hidden = false;
@@ -2557,58 +2334,59 @@
     syncPdfExport();
   }
 
-  // The "All tasks" page is a sub-option of the Team page, so grey it out (and
-  // ignore it on export) whenever the Team page itself is off.
-  function syncPdfTeamSub() {
-    const on = byId('pdf-team-on').checked;
-    const sub = byId('pdf-team-alltasks');
-    sub.disabled = !on;
-    const row = sub.closest('.pdf-subopt');
-    if (row) row.classList.toggle('disabled', !on);
-  }
-
-  // The "Upcoming milestones" page is a sub-option of the Forecast page, so grey
-  // it out (and ignore it on export) whenever the Forecast page itself is off.
-  function syncPdfForecastSub() {
-    const on = byId('pdf-forecast-on').checked;
+  // Forecast section: the "upcoming milestones" sub-option (and its weeks box)
+  // only applies to the Timeline page, so grey them out when it's off; the weeks
+  // box also greys when the milestones checkbox itself is off.
+  function syncForecast() {
+    const tlOn = byId('pdf-forecast-timeline-on').checked;
     const sub = byId('pdf-forecast-milestones');
+    sub.disabled = !tlOn;
+    const row = sub.closest('.pdf-subopt');
+    if (row) row.classList.toggle('disabled', !tlOn);
+    byId('pdf-forecast-milestone-weeks').disabled = !tlOn || !sub.checked;
+  }
+
+  // Global "All tasks": the "include completed" sub-option greys out with it.
+  function syncGlobalAllTasks() {
+    const on = byId('pdf-global-alltasks-on').checked;
+    const sub = byId('pdf-global-completed');
     sub.disabled = !on;
     const row = sub.closest('.pdf-subopt');
     if (row) row.classList.toggle('disabled', !on);
   }
 
-  // Team shares the forecast's window when both are on; otherwise it gets its
-  // own days input.
-  function syncPdfDays() {
-    const fOn = byId('pdf-forecast-on').checked;
-    byId('pdf-team-days-wrap').hidden = fOn;
-    byId('pdf-team-shared').hidden = !fOn;
-  }
-  // Only the Global page's Past/Future range controls toggle with its checkbox;
-  // the project checklist is shared by every page and always stays enabled.
-  function syncPdfGlobal() {
-    const on = byId('pdf-global-on').checked;
+  // Global "Timeline": the range controls grey out with the checkbox, and the
+  // From/To date rows appear only in the modes that use them (From for 'range'
+  // and 'toEnd'; To for 'range' only).
+  function syncGlobalTimeline() {
+    const on = byId('pdf-global-timeline-on').checked;
     const range = byId('pdf-global-range');
     range.classList.toggle('disabled', !on);
-    range.querySelectorAll('select, input').forEach((el) => { el.disabled = !on; });
-  }
-  // Reveal each month-count input only when its select is in "limit" mode.
-  function syncPdfGlobalRange() {
-    byId('pdf-global-past-extra').hidden = byId('pdf-global-past').value !== 'limit';
-    byId('pdf-global-future-extra').hidden = byId('pdf-global-future').value !== 'limit';
+    range.querySelectorAll('select, input, button').forEach((el) => { el.disabled = !on; });
+    const mode = byId('pdf-global-range-mode').value;
+    byId('pdf-global-start-row').hidden = !(mode === 'range' || mode === 'toEnd');
+    byId('pdf-global-end-row').hidden = mode !== 'range';
   }
   function syncPdfExport() {
-    const anyPage = byId('pdf-forecast-on').checked || byId('pdf-team-on').checked || byId('pdf-global-on').checked;
-    const anyProject = !!byId('pdf-projects').querySelector('input:checked');
+    const anyPage = byId('pdf-forecast-timeline-on').checked || byId('pdf-forecast-team-on').checked
+      || byId('pdf-global-alltasks-on').checked || byId('pdf-global-timeline-on').checked;
+    const anyProject = !!byId('pdf-projects').querySelector('input[data-file]:checked');
     byId('pdf-export').disabled = !(anyPage && anyProject);
   }
   function clampDays(v) {
     const x = parseInt(v, 10);
     return Number.isFinite(x) ? Math.min(120, Math.max(1, x)) : 7;
   }
-  function clampMonths(v) {
+  // Milestones look-ahead: a positive number of weeks, or null (blank/invalid) =
+  // all upcoming milestones.
+  function weeksOrNull(v) {
     const x = parseInt(v, 10);
-    return Number.isFinite(x) ? Math.min(120, Math.max(1, x)) : 3;
+    return Number.isFinite(x) && x > 0 ? Math.min(520, x) : null;
+  }
+  // A trimmed ISO date if the field holds a valid YYYY-MM-DD, else null.
+  function isoOrNull(v) {
+    const s = String(v || '').trim();
+    return P.DATE_RE.test(s) ? s : null;
   }
 
   // Read + parse each file into the { file, title, color, model } shape the PDF
@@ -2631,21 +2409,28 @@
   }
 
   async function doPdfExport() {
-    const files = [...byId('pdf-projects').querySelectorAll('input:checked')].map((i) => i.dataset.file);
+    // Only project rows carry a data-file; the per-profile group-header checkboxes
+    // (.pdf-group-check) are checked too but have no file, so scope to data-file.
+    const files = [...byId('pdf-projects').querySelectorAll('input[data-file]:checked')].map((i) => i.dataset.file);
     if (!files.length) return;
+    // One shared forecast span drives both the Timeline and Team pages.
+    const forecastDays = clampDays(byId('pdf-forecast-days').value);
+    const timelineOn = byId('pdf-forecast-timeline-on').checked;
     const forecast = {
-      on: byId('pdf-forecast-on').checked,
-      days: clampDays(byId('pdf-forecast-days').value),
-      milestones: byId('pdf-forecast-on').checked && byId('pdf-forecast-milestones').checked,
+      days: forecastDays,
+      timeline: {
+        on: timelineOn,
+        milestones: timelineOn && byId('pdf-forecast-milestones').checked,
+        milestoneWeeks: weeksOrNull(byId('pdf-forecast-milestone-weeks').value),
+      },
+      team: { on: byId('pdf-forecast-team-on').checked },
     };
-    const teamOn = byId('pdf-team-on').checked;
-    const teamDays = forecast.on ? forecast.days : clampDays(byId('pdf-team-days').value);
-    const team = { on: teamOn, days: teamDays, allTasks: teamOn && byId('pdf-team-alltasks').checked };
-    const globalOn = byId('pdf-global-on').checked;
-    if (!forecast.on && !team.on && !globalOn) return;
+    const allTasksOn = byId('pdf-global-alltasks-on').checked;
+    const globalTimelineOn = byId('pdf-global-timeline-on').checked;
+    if (!forecast.timeline.on && !forecast.team.on && !allTasksOn && !globalTimelineOn) return;
 
     const pageSize = (document.querySelector('input[name="pdf-paper"]:checked') || {}).value || 'Letter';
-    const windowDays = forecast.on ? forecast.days : (team.on ? team.days : 7);
+    const windowDays = forecastDays;
     // One checklist drives every page. A single project bands the Forecast by
     // assignee (like a project view); several band it by project.
     const scopeKind = files.length === 1 ? 'project' : 'all';
@@ -2662,8 +2447,12 @@
     if (files.length === 1) scopeTitle = (metaByFile.get(files[0]) || {}).title || 'Project';
     else if (files.length === profileTotal) scopeTitle = selProfile ? `All ${selProfile} projects` : 'All projects';
     else scopeTitle = `${files.length} projects`;
-    const globalPast = { mode: byId('pdf-global-past').value, months: clampMonths(byId('pdf-global-past-n').value) };
-    const globalFuture = { mode: byId('pdf-global-future').value, months: clampMonths(byId('pdf-global-future-n').value) };
+    const rangeMode = byId('pdf-global-range-mode').value; // 'all' | 'range' | 'toEnd'
+    const globalRange = {
+      mode: rangeMode,
+      startISO: isoOrNull(byId('pdf-global-start').value),
+      endISO: isoOrNull(byId('pdf-global-end').value),
+    };
 
     const btn = byId('pdf-export');
     const prev = btn.textContent;
@@ -2679,9 +2468,12 @@
         scopeTitle,
         scopeProjects,
         forecast,
-        team,
         windowDays,
-        global: { on: globalOn, projects: scopeProjects, past: globalPast, future: globalFuture },
+        global: {
+          projects: scopeProjects,
+          allTasks: { on: allTasksOn, includeCompleted: byId('pdf-global-completed').checked },
+          timeline: { on: globalTimelineOn, range: globalRange },
+        },
         pageSize,
         profileName: selProfile,
         todayISO: P.todayISO(),
@@ -2702,9 +2494,15 @@
     }
   }
 
-  byId('pdf-forecast-on').addEventListener('change', () => { syncPdfDays(); syncPdfForecastSub(); syncPdfExport(); });
-  byId('pdf-team-on').addEventListener('change', () => { syncPdfTeamSub(); syncPdfExport(); });
-  byId('pdf-global-on').addEventListener('change', () => { syncPdfGlobal(); syncPdfExport(); });
+  byId('pdf-forecast-timeline-on').addEventListener('change', () => { syncForecast(); syncPdfExport(); });
+  byId('pdf-forecast-milestones').addEventListener('change', syncForecast);
+  byId('pdf-forecast-team-on').addEventListener('change', syncPdfExport);
+  byId('pdf-global-alltasks-on').addEventListener('change', () => { syncGlobalAllTasks(); syncPdfExport(); });
+  byId('pdf-global-timeline-on').addEventListener('change', () => { syncGlobalTimeline(); syncPdfExport(); });
+  byId('pdf-global-range-mode').addEventListener('change', syncGlobalTimeline);
+  // App-themed calendar popups for the Global-timeline From/To fields.
+  window.DatePicker.attach(byId('pdf-global-start'));
+  window.DatePicker.attach(byId('pdf-global-end'));
   byId('pdf-projects').addEventListener('change', (e) => {
     if (e.target.classList.contains('pdf-group-check')) {
       const grp = pdfGroups.find((g) => g.check === e.target);
@@ -2715,8 +2513,6 @@
   });
   byId('pdf-projects-all').addEventListener('click', () => setAllPdfProjects(true));
   byId('pdf-projects-none').addEventListener('click', () => setAllPdfProjects(false));
-  byId('pdf-global-past').addEventListener('change', syncPdfGlobalRange);
-  byId('pdf-global-future').addEventListener('change', syncPdfGlobalRange);
   byId('pdf-folder-btn').addEventListener('click', async () => {
     const res = await window.pdfExport.chooseFolder(pdfDir || undefined);
     if (res && res.dir) {
@@ -2736,6 +2532,28 @@
 
   // ---- helpers ----------------------------------------------------------
   function byId(id) { return document.getElementById(id); }
+
+  // Clipboard with a file:// fallback (the async Clipboard API can be blocked).
+  // Used by the Team view's "copy list" action.
+  function copyText(text) {
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { /* nothing more we can do */ }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(fallback);
+    }
+    fallback();
+    return Promise.resolve();
+  }
 
   // ---- boot -------------------------------------------------------------
   // Show the app version in the Settings header (best-effort; non-fatal).
