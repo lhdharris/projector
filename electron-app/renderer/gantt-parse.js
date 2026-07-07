@@ -151,9 +151,14 @@
         task.start = rest[1];
         task.duration = rest[2];
       } else if (rest.length === 2) {
-        // Could be (id, dur) or (start, dur). Mermaid treats a lone leading
-        // token as the start unless it's clearly an id (not a date/after/dur).
-        if (looksLikeStart(rest[0]) || looksLikeDurOrEnd(rest[1])) {
+        // Could be (id, dur/end) or (start, dur/end). The leading token is a
+        // start only when it actually looks like one — a date or an "after"
+        // ref; anything else (e.g. "t3") is an id whose start is implied by the
+        // previous task. Do NOT flip to (start, dur) merely because the SECOND
+        // token is a duration: that mis-read the serializer's own "<id>, <dur>"
+        // output as start="<id>", dropping the id and corrupting the file on the
+        // next save (Mermaid then saw "Invalid date:<id>").
+        if (looksLikeStart(rest[0])) {
           task.start = rest[0];
           task.duration = rest[1];
         } else {
@@ -201,6 +206,23 @@
     if (model.profile) lines.push(`    %% projector:profile ${model.profile}`);
     if (model.color) lines.push(`    %% projector:color ${model.color}`);
 
+    // A task with no explicit start means "start when the previous task ends"
+    // (Mermaid's implicit behaviour). Mermaid can only express that on a task
+    // WITHOUT an id, so to keep the id we materialize it as an explicit
+    // "after <prevId>", using the previous task in model order (the same order
+    // resolveSchedule follows). This keeps every emitted line unambiguous and
+    // round-trip stable: a bare "<id>, <dur>" (2 tokens) would otherwise be
+    // re-read as start="<id>", silently dropping the id. The very first task has
+    // nothing to follow, so it falls back to a concrete start (today).
+    const effStart = new Map();
+    for (let i = 0; i < model.tasks.length; i++) {
+      const t = model.tasks[i];
+      if (t.start) { effStart.set(t, t.start); continue; }
+      if (!t.duration) { effStart.set(t, ''); continue; } // no start, no dur: leave as-is
+      const prev = model.tasks[i - 1];
+      effStart.set(t, prev && prev.id ? `after ${prev.id}` : todayISO());
+    }
+
     // Group tasks by assignee, preserving first-seen order. Mermaid needs a
     // section per task, so unassigned tasks are emitted under "Unassigned".
     const order = [];
@@ -215,21 +237,25 @@
       lines.push('');
       lines.push(`    section ${key}`);
       for (const t of byAssignee.get(key)) {
-        lines.push(`        ${serializeTask(t)}`);
+        lines.push(`        ${serializeTask(t, effStart.get(t))}`);
       }
     }
     return lines.join('\n');
   }
 
-  function serializeTask(t) {
+  // startOverride lets serializeGantt substitute a materialized start (e.g. an
+  // explicit "after <prevId>" for a task whose start is implied) so the emitted
+  // line is Mermaid-valid and round-trips. Defaults to the task's own start.
+  function serializeTask(t, startOverride) {
     const tags = [];
     if (t.milestone) tags.push('milestone');
     if (t.crit) tags.push('crit');
     if (t.status === 'done') tags.push('done');
     else if (t.status === 'active') tags.push('active');
 
+    const start = startOverride !== undefined ? startOverride : t.start;
     const meta = [...tags, t.id];
-    if (t.start) meta.push(t.start);
+    if (start) meta.push(start);
     if (t.duration) meta.push(t.duration);
     return `${t.name || 'Untitled'} :${meta.join(', ')}`;
   }
