@@ -5,12 +5,11 @@ already done: the `v<version>` GitHub release exists with the `.rpm` and `.deb`
 attached. Your job here is to build the **`.dmg`** (macOS) and **`.exe`** (Windows)
 installers and **upload them to that same existing release**.
 
-> **Current target (update this line each release):** as of **2026-07-07** the live
-> release is **`v1.6.1`** — the Linux `.rpm` and `.deb` are built and attached; your
-> job on the Mac is to add the `.dmg` (and `.exe` if Wine cooperates). The steps
-> below read the version from `package.json`, so they don't need editing; just
-> confirm `node -p "require('./package.json').version"` prints `1.6.1` after you
-> pull `main`.
+> **Current target (update this line each release):** as of **2026-07-09** the live
+> release is **`v1.6.2`** — all installers (`.rpm`, `.deb`, `.dmg`, `.exe`) were
+> built on the Mac and attached. The steps below read the version from
+> `package.json`, so they don't need editing; just confirm
+> `node -p "require('./package.json').version"` prints `1.6.2` after you pull `main`.
 
 This app is a local-first, Markdown + Mermaid-gantt project planner for self-hosting /
 local-org folks who want to run a small **team** off plain `.md` files on their own

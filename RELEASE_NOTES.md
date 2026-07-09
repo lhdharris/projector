@@ -1,13 +1,13 @@
-# Projector v1.6.1
+# Projector v1.6.2
 
 A local-first project & **team** planner built on plain Markdown + Mermaid gantt
 charts. Every project is just a `.md` file in a folder you control — no cloud
 account, no subscription, no server.
 
-A bug-fix release: it repairs a case where a project's timeline could stop
-rendering with an **`Invalid date`** error.
+A maintenance release: no functional changes over v1.6.1 — it refreshes the
+published installers for all platforms.
 
-## Fixes
+## Fixes (carried over from v1.6.1)
 - **Timeline no longer breaks with an `Invalid date` error.** A task with no
   explicit start date (meaning "start when the previous task ends") could, over
   repeated saves, have its internal id shuffled into the start slot — corrupting
@@ -34,10 +34,10 @@ rendering with an **`Invalid date`** error.
 ## Downloads
 | Platform | File |
 |---|---|
-| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.6.1.x86_64.rpm` — `sudo rpm -i …` |
-| Debian/Ubuntu (DEB) | `projector-app_1.6.1_amd64.deb` — `sudo dpkg -i …` |
-| macOS (DMG) | `Projector-1.6.1.dmg` (Intel) / `Projector-1.6.1-arm64.dmg` (Apple Silicon) |
-| Windows (EXE) | `Projector Setup 1.6.1.exe` |
+| Fedora/RHEL/openSUSE (RPM) | `projector-app-1.6.2.x86_64.rpm` — `sudo rpm -i …` |
+| Debian/Ubuntu (DEB) | `projector-app_1.6.2_amd64.deb` — `sudo dpkg -i …` |
+| macOS (DMG) | `Projector-1.6.2.dmg` (Intel) / `Projector-1.6.2-arm64.dmg` (Apple Silicon) |
+| Windows (EXE) | `Projector Setup 1.6.2.exe` |
 
 > These builds are **unsigned**. macOS: right-click → **Open** (or
 > `xattr -dr com.apple.quarantine /Applications/Projector.app`). Windows
